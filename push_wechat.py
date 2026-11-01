@@ -161,37 +161,49 @@ def main():
     stamp = now.strftime("%Y%m%d%H%M")
     real_url = ("%s%s_v=%s" % (img_url, sep, stamp)) if img_url else ""
 
+    def fallback(reason):
+        """ClawBot 不可用 / 未激活时的兜底：走服务号。"""
+        print("%s，降级为服务号图文 ..." % reason)
+        if img_url and not use_text:
+            c = build_image_html(data, real_url)
+            kind2 = "图片"
+        else:
+            import render
+            c = render.render_wechat(data, session)
+            kind2 = "文字表格"
+        r2 = push.send_pushplus(token, title, c, template="html", channel="wechat")
+        print("降级结果(%s) code=%s msg=%s" % (kind2, r2.get("code"), r2.get("msg")))
+        return 0 if r2.get("code") == 200 else 2
+
     if channel == "clawbot":
-        # 微信 ClawBot 只下发文字，图通过链接查看；建议 template=txt
+        # 微信 ClawBot 只下发文字 → 正文给摘要，末尾给长图链接
         content = build_text(data, real_url)
-        template = "txt"
-        kind = "ClawBot文字"
-    elif img_url and not use_text:
+        print("微信渠道: ClawBot  模式: 文字+图链  内容字节: %d" % len(content.encode("utf-8")))
+        r = push.send_pushplus(token, title, content, template="txt", channel="clawbot")
+        print("ClawBot code=%s msg=%s" % (r.get("code"), r.get("msg")))
+
+        if r.get("code") != 200:
+            return fallback("ClawBot 未激活或已达频控（每 10 条 / 每 24 小时需主动发起一次对话）")
+
+        # 双推：ClawBot 不支持图片，再走服务号发一张原图，保证微信里能直接看到图
+        if cfg.get("微信双推图片", True) and real_url:
+            c2 = build_image_html(data, real_url)
+            r3 = push.send_pushplus(token, title, c2, template="html", channel="wechat")
+            print("双推原图(服务号) code=%s msg=%s" % (r3.get("code"), r3.get("msg")))
+        return 0
+
+    if img_url and not use_text:
         content = build_image_html(data, real_url)
-        template = "html"
         kind = "图片"
     else:
         import render
         content = render.render_wechat(data, session)
-        template = "html"
         kind = "文字表格"
 
-    print("微信渠道: %s  模式: %s  内容字节: %d" % (
-        channel, kind, len(content.encode("utf-8"))))
-    r = push.send_pushplus(token, title, content, template=template, channel=channel)
+    print("微信渠道: 服务号  模式: %s  内容字节: %d" % (
+        kind, len(content.encode("utf-8"))))
+    r = push.send_pushplus(token, title, content, template="html", channel="wechat")
     print("code=%s msg=%s" % (r.get("code"), r.get("msg")))
-
-    if r.get("code") != 200 and channel == "clawbot":
-        # ClawBot 未激活 / 超频时，降级回服务号推原图，保证不丢消息
-        print("ClawBot 失败（需绑定激活；每 10 条 / 每 24 小时需主动发起一次对话），降级为服务号图文 ...")
-        if img_url and not use_text:
-            content2 = build_image_html(data, real_url)
-        else:
-            import render
-            content2 = render.render_wechat(data, session)
-        r2 = push.send_pushplus(token, title, content2, template="html", channel="wechat")
-        print("降级结果 code=%s msg=%s" % (r2.get("code"), r2.get("msg")))
-        return 0 if r2.get("code") == 200 else 2
     return 0 if r.get("code") == 200 else 2
 
 
