@@ -23,6 +23,7 @@ jobs:
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       WX_CHANNEL: clawbot
+      WX_DUP_IMAGE: "false"
       IMAGE_URL: "https://wu-jiangping.github.io/astock-daily-img/latest.jpg"
       TZ: Asia/Shanghai
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
