@@ -1,0 +1,11 @@
+out/
+logs/
+cache/
+site/
+node_modules/
+package-lock.json
+package.json
+__pycache__/
+*.log
+# 含密钥，不进仓库；云端用 Secrets 注入
+config.json
