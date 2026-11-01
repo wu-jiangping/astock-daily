@@ -41,6 +41,10 @@ def load_cfg():
         cfg["微信渠道"] = os.environ["WX_CHANNEL"]
     if os.environ.get("IMAGE_URL") is not None:
         cfg["图片外链"] = os.environ["IMAGE_URL"]
+    # 云端开关：ClawBot 之外是否再用服务号补发一张原图（"0"/"false"/"no" 关闭）
+    if os.environ.get("WX_DUP_IMAGE") is not None:
+        cfg["微信双推图片"] = os.environ["WX_DUP_IMAGE"].strip().lower() not in (
+            "0", "false", "no", "off", "")
     return cfg
 
 
