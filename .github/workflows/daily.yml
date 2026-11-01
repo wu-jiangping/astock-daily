@@ -1,0 +1,74 @@
+name: A股日报定时推送
+
+on:
+  schedule:
+    # 时间为 UTC；对应北京时间 = UTC + 8
+    - cron: "0 1 * * 1-5"     # 09:00 早报（周一至周五）
+    - cron: "30 4 * * 1-5"    # 12:30 午报
+    - cron: "50 10 * * 1-5"   # 18:50 晚报
+  workflow_dispatch:
+    inputs:
+      session:
+        description: "场次"
+        required: true
+        default: "早报"
+        type: choice
+        options: [早报, 午报, 晚报]
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      WX_CHANNEL: clawbot
+      IMAGE_URL: ""
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet pillow
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm i --no-save playwright-core
+
+      # 安装 Chromium 与中文字体
+      - name: 安装 Chromium
+        run: |
+          npm i --no-save playwright
+          npx playwright install chromium
+      - name: 安装中文字体
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+      - name: 定位浏览器
+        run: echo "CHROME_PATH=$(ls ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome | head -1)" >> $GITHUB_ENV
+
+      - name: 判断场次
+        run: |
+          h=$(date -u +%H)
+          if   [ "$h" = "01" ]; then S="早报"
+          elif [ "$h" = "04" ]; then S="午报"
+          elif [ "$h" = "10" ]; then S="晚报"
+          else S="${{ github.event.inputs.session }}"; fi
+          [ -z "$S" ] && S="早报"
+          echo "SESSION=$S" >> $GITHUB_ENV
+          echo "场次=$S (UTC hour=$h)"
+
+      - name: 生成并推送企业微信
+        run: python run_report.py "$SESSION"
+
+      - name: 推送个人微信
+        run: python push_wechat.py "$SESSION"
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ github.run_number }}
+          path: out/*.png
+          retention-days: 7
