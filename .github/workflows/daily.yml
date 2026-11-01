@@ -68,7 +68,13 @@ jobs:
 
       - name: 更新在线长图
         continue-on-error: true
-        run: python _push_img.py
+        run: |
+          if python _push_img.py; then
+            echo "IMAGE_URL=https://wu-jiangping.github.io/astock-daily-img/latest.jpg" >> $GITHUB_ENV
+          else
+            echo "图上传失败，本次不附长图链接（避免指向旧图）"
+            echo "IMAGE_URL=" >> $GITHUB_ENV
+          fi
 
       - name: 推送个人微信
         run: python push_wechat.py "$SESSION"
