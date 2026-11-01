@@ -23,8 +23,11 @@ jobs:
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
       WX_CHANNEL: clawbot
-      IMAGE_URL: ""
+      IMAGE_URL: "https://wu-jiangping.github.io/astock-daily-img/latest.jpg"
       TZ: Asia/Shanghai
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GH_OWNER: wu-jiangping
+      IMG_REPO: astock-daily-img
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +64,10 @@ jobs:
 
       - name: 生成并推送企业微信
         run: python run_report.py "$SESSION"
+
+      - name: 更新在线长图
+        continue-on-error: true
+        run: python _push_img.py
 
       - name: 推送个人微信
         run: python push_wechat.py "$SESSION"
