@@ -92,7 +92,7 @@ def build_text(data, img_url):
             seg.append("净买 %s %.2f亿" % (b[0]["名称"], (b[0].get("净买入") or 0) / 1e8))
         if sl:
             seg.append("净卖 %s %.2f亿" % (sl[0]["名称"], (sl[0].get("净买入") or 0) / 1e8))
-        L.append("龙虎榜（%s）：%s" % (lhb.get("交易日", "")[5:], " ｜ ".join(seg)))
+        L.append("龙虎榜（%s收盘）：%s" % (lhb.get("交易日", "")[5:], " ｜ ".join(seg)))
 
     nw = data.get("要闻") or []
     if nw:
