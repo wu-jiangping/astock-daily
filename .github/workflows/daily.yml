@@ -4,9 +4,11 @@ on:
   schedule:
     # GitHub 定时高峰会延迟 10-40 分钟 → 提前触发、卡点等待，确保准点推送。
     # 时间为 UTC；北京时间 = UTC + 8（每天推送，含周末）
+    # 晚报定在 20:00：龙虎榜当日数据要收盘后才陆续披露，18:50 常拿不到，
+    # 只能回退到上一交易日，故整体后移到数据基本齐全的时点。
     - cron: "20 23 * * *"    # 次日 07:20 排队 → 卡点 09:00 早报
     - cron: "50 2 * * *"     # 10:50 排队 → 卡点 12:30 午报
-    - cron: "10 9 * * *"     # 17:10 排队 → 卡点 18:50 晚报
+    - cron: "20 10 * * *"    # 18:20 排队 → 卡点 20:00 晚报
   workflow_dispatch:
     inputs:
       session:
@@ -19,7 +21,7 @@ on:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 130
+    timeout-minutes: 150
     env:
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
@@ -55,15 +57,16 @@ jobs:
 
       - name: 判断场次
         run: |
-          # 用北京时间判断（早报 cron 在 UTC 前一天触发，用 UTC 小时会错）
-          h=$(date +%H)
-          if   [ "$h" = "07" ] || [ "$h" = "08" ]; then S="早报"
-          elif [ "$h" = "10" ] || [ "$h" = "11" ]; then S="午报"
-          elif [ "$h" = "17" ] || [ "$h" = "18" ]; then S="晚报"
-          else S="${{ github.event.inputs.session }}"; fi
+          # 直接用触发的 cron 精确判定，避免按小时猜（早报 cron 跨 UTC 日、且 schedule 会延迟）
+          S="${{ github.event.inputs.session }}"
+          case "${{ github.event.schedule }}" in
+            "20 23 * * *") S="早报" ;;
+            "50 2 * * *")  S="午报" ;;
+            "20 10 * * *") S="晚报" ;;
+          esac
           [ -z "$S" ] && S="早报"
           echo "SESSION=$S" >> $GITHUB_ENV
-          echo "场次=$S (北京时间 hour=$h)"
+          echo "场次=$S (schedule=${{ github.event.schedule }})"
 
       # 卡点等待：定时触发时睡到目标时刻前 75 秒（生成约 75 秒），手动触发不等待
       - name: 等待到准点
@@ -72,7 +75,7 @@ jobs:
           python - <<'PYEOF'
           import time, datetime, os
           s = os.environ["SESSION"]
-          tgt = {"早报": "09:00:00", "午报": "12:30:00", "晚报": "18:50:00"}[s]
+          tgt = {"早报": "09:00:00", "午报": "12:30:00", "晚报": "20:00:00"}[s]
           now = datetime.datetime.now()
           t = datetime.datetime.strptime(now.strftime("%Y-%m-%d ") + tgt, "%Y-%m-%d %H:%M:%S")
           wait = (t - datetime.timedelta(seconds=75) - now).total_seconds()
