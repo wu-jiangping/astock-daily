@@ -239,14 +239,15 @@ def block_lhb(l):
     if not 买 and not 卖:
         return ""
     day = l.get("交易日") or ""
-    out = [section("05", "龙虎榜资金", "%s 主力抢筹 / 资金出逃" % esc(day))]
+    tag = "数据日期 %s（收盘后更新，非当日实时）" % esc(day) if day else "最近交易日"
+    out = [section("05", "龙虎榜资金", "%s 主力抢筹 / 资金出逃" % tag)]
     if 买:
         out.append('<div class="subhead up">▲ 主力净买入</div>')
         out.append('<div class="card">%s</div>' % "".join(lhb_row(x) for x in 买))
     if 卖:
         out.append('<div class="subhead down">▼ 资金净卖出</div>')
         out.append('<div class="card">%s</div>' % "".join(lhb_row(x) for x in 卖))
-    out.append('<div class="note">数据为最近交易日龙虎榜，机构席位参与情况以交易所披露为准</div>')
+    out.append('<div class="note">龙虎榜在收盘后才更新，此处为最近一个交易日数据；机构席位情况以交易所披露为准</div>')
     out.append('</div>')
     return "".join(out)
 
