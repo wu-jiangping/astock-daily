@@ -239,7 +239,15 @@ def block_lhb(l):
     if not 买 and not 卖:
         return ""
     day = l.get("交易日") or ""
-    tag = "数据日期 %s（收盘后更新，非当日实时）" % esc(day) if day else "最近交易日"
+    if day and l.get("是否当日"):
+        tag = "当日数据 %s（收盘后披露）" % esc(day)
+        note = "交易所盘后披露的当日龙虎榜；机构席位情况以交易所披露为准"
+    elif day:
+        tag = "当日尚未披露 · 展示最近交易日 %s" % esc(day)
+        note = "当日龙虎榜要收盘后才陆续披露，本期生成时尚未入库，故展示最近一个交易日数据；以交易所披露为准"
+    else:
+        tag = "最近交易日"
+        note = "龙虎榜在收盘后才更新；机构席位情况以交易所披露为准"
     out = [section("05", "龙虎榜资金", "%s 主力抢筹 / 资金出逃" % tag)]
     if 买:
         out.append('<div class="subhead up">▲ 主力净买入</div>')
@@ -247,7 +255,7 @@ def block_lhb(l):
     if 卖:
         out.append('<div class="subhead down">▼ 资金净卖出</div>')
         out.append('<div class="card">%s</div>' % "".join(lhb_row(x) for x in 卖))
-    out.append('<div class="note">龙虎榜在收盘后才更新，此处为最近一个交易日数据；机构席位情况以交易所披露为准</div>')
+    out.append('<div class="note">%s</div>' % note)
     out.append('</div>')
     return "".join(out)
 
@@ -356,7 +364,9 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
         买 = (lhb.get("买入") or [])[:lim["龙虎买"]]
         卖 = (lhb.get("卖出") or [])[:lim["龙虎卖"]]
         if 买 or 卖:
-            p.append("<h3>05 龙虎榜资金</h3>")
+            d = lhb.get("交易日") or ""
+            mark = "当日 %s" % d if lhb.get("是否当日") else ("当日未披露 · %s" % d if d else "最近交易日")
+            p.append("<h3>05 龙虎榜资金（%s）</h3>" % esc(mark))
             rows = []
             for x in 买 + 卖:
                 net = x.get("净买入") or 0
