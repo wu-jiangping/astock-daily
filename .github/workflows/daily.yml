@@ -2,10 +2,11 @@ name: A股日报定时推送
 
 on:
   schedule:
-    # 时间为 UTC；对应北京时间 = UTC + 8（每天推送，含周末）
-    - cron: "0 1 * * *"       # 09:00 早报
-    - cron: "30 4 * * *"      # 12:30 午报
-    - cron: "50 10 * * *"     # 18:50 晚报
+    # GitHub 定时高峰会延迟 10-40 分钟 → 提前触发、卡点等待，确保准点推送。
+    # 时间为 UTC；北京时间 = UTC + 8（每天推送，含周末）
+    - cron: "10 0 * * *"     # 08:10 排队 → 卡点 09:00 早报
+    - cron: "50 3 * * *"     # 11:50 排队 → 卡点 12:30 午报
+    - cron: "10 10 * * *"    # 18:10 排队 → 卡点 18:50 晚报
   workflow_dispatch:
     inputs:
       session:
@@ -18,17 +19,17 @@ on:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 75
     env:
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      GH_OWNER: wu-jiangping
+      IMG_REPO: astock-daily-img
       WX_CHANNEL: clawbot
       WX_DUP_IMAGE: "false"
       IMAGE_URL: "https://wu-jiangping.github.io/astock-daily-img/latest.jpg"
       TZ: Asia/Shanghai
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      GH_OWNER: wu-jiangping
-      IMG_REPO: astock-daily-img
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +43,7 @@ jobs:
           node-version: "20"
       - run: npm i --no-save playwright-core
 
-      # 安装 Chromium 与中文字体
+      # 安装 Chromium 与中文字体（装完再等待，等待期不浪费）
       - name: 安装 Chromium
         run: |
           npm i --no-save playwright
@@ -55,13 +56,32 @@ jobs:
       - name: 判断场次
         run: |
           h=$(date -u +%H)
-          if   [ "$h" = "01" ]; then S="早报"
-          elif [ "$h" = "04" ]; then S="午报"
-          elif [ "$h" = "10" ]; then S="晚报"
+          if   [ "$h" = "00" ] || [ "$h" = "01" ]; then S="早报"
+          elif [ "$h" = "03" ] || [ "$h" = "04" ]; then S="午报"
+          elif [ "$h" = "10" ] || [ "$h" = "11" ]; then S="晚报"
           else S="${{ github.event.inputs.session }}"; fi
           [ -z "$S" ] && S="早报"
           echo "SESSION=$S" >> $GITHUB_ENV
           echo "场次=$S (UTC hour=$h)"
+
+      # 卡点等待：定时触发时睡到目标时刻前 75 秒（生成约 75 秒），手动触发不等待
+      - name: 等待到准点
+        if: env.GITHUB_EVENT_NAME == 'schedule'
+        run: |
+          python - <<'PYEOF'
+          import time, datetime, os
+          s = os.environ["SESSION"]
+          tgt = {"早报": "09:00:00", "午报": "12:30:00", "晚报": "18:50:00"}[s]
+          now = datetime.datetime.now()
+          t = datetime.datetime.strptime(now.strftime("%Y-%m-%d ") + tgt, "%Y-%m-%d %H:%M:%S")
+          wait = (t - datetime.timedelta(seconds=75) - now).total_seconds()
+          if wait > 0:
+              print("卡点等待 %.0f 秒（目标 %s %s）" % (wait, s, tgt), flush=True)
+              time.sleep(min(wait, 3000))
+              print("到点，开跑", flush=True)
+          else:
+              print("已过准点，直接开跑")
+          PYEOF
 
       - name: 生成并推送企业微信
         run: python run_report.py "$SESSION"
