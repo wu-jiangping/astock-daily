@@ -771,7 +771,8 @@ def fetch_lhb(top_n=6, bottom_n=4, days_back=5):
     卖出 = [x for x in with_net if x["净买入"] < 0]
     卖出.sort(key=lambda x: x["净买入"])
     卖出 = 卖出[:bottom_n]
-    return {"买入": 买入, "卖出": 卖出, "交易日": latest, "样本数": len(items)}
+    return {"买入": 买入, "卖出": 卖出, "交易日": latest, "样本数": len(items),
+            "是否当日": latest == today.isoformat()}
 
 
 # ---------------------------------------------------------------- 汇总
