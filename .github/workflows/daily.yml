@@ -4,9 +4,9 @@ on:
   schedule:
     # GitHub 定时高峰会延迟 10-40 分钟 → 提前触发、卡点等待，确保准点推送。
     # 时间为 UTC；北京时间 = UTC + 8（每天推送，含周末）
-    - cron: "10 0 * * *"     # 08:10 排队 → 卡点 09:00 早报
-    - cron: "50 3 * * *"     # 11:50 排队 → 卡点 12:30 午报
-    - cron: "10 10 * * *"    # 18:10 排队 → 卡点 18:50 晚报
+    - cron: "20 23 * * *"    # 次日 07:20 排队 → 卡点 09:00 早报
+    - cron: "50 2 * * *"     # 10:50 排队 → 卡点 12:30 午报
+    - cron: "10 9 * * *"     # 17:10 排队 → 卡点 18:50 晚报
   workflow_dispatch:
     inputs:
       session:
@@ -19,7 +19,7 @@ on:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 130
     env:
       WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
@@ -55,14 +55,15 @@ jobs:
 
       - name: 判断场次
         run: |
-          h=$(date -u +%H)
-          if   [ "$h" = "00" ] || [ "$h" = "01" ]; then S="早报"
-          elif [ "$h" = "03" ] || [ "$h" = "04" ]; then S="午报"
-          elif [ "$h" = "10" ] || [ "$h" = "11" ]; then S="晚报"
+          # 用北京时间判断（早报 cron 在 UTC 前一天触发，用 UTC 小时会错）
+          h=$(date +%H)
+          if   [ "$h" = "07" ] || [ "$h" = "08" ]; then S="早报"
+          elif [ "$h" = "10" ] || [ "$h" = "11" ]; then S="午报"
+          elif [ "$h" = "17" ] || [ "$h" = "18" ]; then S="晚报"
           else S="${{ github.event.inputs.session }}"; fi
           [ -z "$S" ] && S="早报"
           echo "SESSION=$S" >> $GITHUB_ENV
-          echo "场次=$S (UTC hour=$h)"
+          echo "场次=$S (北京时间 hour=$h)"
 
       # 卡点等待：定时触发时睡到目标时刻前 75 秒（生成约 75 秒），手动触发不等待
       - name: 等待到准点
@@ -77,7 +78,7 @@ jobs:
           wait = (t - datetime.timedelta(seconds=75) - now).total_seconds()
           if wait > 0:
               print("卡点等待 %.0f 秒（目标 %s %s）" % (wait, s, tgt), flush=True)
-              time.sleep(min(wait, 3000))
+              time.sleep(min(wait, 6300))
               print("到点，开跑", flush=True)
           else:
               print("已过准点，直接开跑")
