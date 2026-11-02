@@ -565,7 +565,8 @@ ANN_IMPORTANT = ["业绩预告", "业绩快报", "业绩预增", "业绩预减",
                  "中标", "重大合同", "重组", "收购", "要约", "股权激励", "分红", "派息",
                  "诉讼", "仲裁", "问询函", "关注函", "立案", "质押", "冻结", "退市",
                  "停牌", "担保", "对外投资", "控制权", "股权转让", "定增", "募资",
-                 "异动", "亏损", "计提", "减值", "高管", "核心技术人员"]
+                 "异动", "亏损", "计提", "减值", "高管", "核心技术人员",
+                 "产销快报", "经营数据", "员工持股", "订单", "涨价", "提价"]
 # 低价值例行公告（命中后排）
 ANN_TRIVIAL = ["投资者关系", "调研", "接待机构", "活动记录", "董事会决议", "监事会决议",
                "股东大会", "公司章程", "管理制度", "独立董事", "募集资金", "提示性",
@@ -583,7 +584,7 @@ def ann_weight(title, col_name=""):
 
 
 def fetch_announcements(limit=12, hours=24):
-    """抓取最新上市公司公告（重要公告优先，例行调研类降权）。"""
+    """抓取最新上市公司公告（时效优先：按发布时间倒序，例行调研类过滤掉）。"""
     url = ("https://np-anotice-stock.eastmoney.com/api/security/ann"
            "?sr=-1&page_size=150&page_index=1&ann_type=A&client_source=web&f_node=0&s_node=0")
     try:
@@ -592,7 +593,7 @@ def fetch_announcements(limit=12, hours=24):
         return []
     lst = ((js.get("data") or {}).get("list")) or []
 
-    def collect(hrs):
+    def collect(hrs, drop=True):
         cutoff = now_cn() - timedelta(hours=hrs)
         buf = []
         for a in lst:
@@ -615,6 +616,9 @@ def fetch_announcements(limit=12, hours=24):
                     title = rest[1:].strip()
             cols = a.get("columns") or []
             col_name = cols[0].get("column_name") if cols else ""
+            w = ann_weight(title, col_name)
+            if drop and w == 0:
+                continue  # 例行调研/活动记录类直接过滤，避免挤占最新公告
             tag, label, color, txt2 = explain_announce(title)
             buf.append({
                 "代码": c0.get("stock_code"),
@@ -625,20 +629,22 @@ def fetch_announcements(limit=12, hours=24):
                 "链接": "https://data.eastmoney.com/notices/detail/%s/%s.html" % (
                     c0.get("stock_code"), a.get("art_code")),
                 "档位": tag, "标签": label, "配色": color, "解读": txt2,
-                "_w": ann_weight(title, col_name),
+                "_w": w,
                 "_ts": dt.timestamp(),
             })
+        # 最新发布在前
+        buf.sort(key=lambda x: -x["_ts"])
         return buf
 
-    # 重要公告不足时自动放宽时间窗，保证内容不空
-    out = collect(hours)
+    # 先取「设定窗口内、已过滤例行公告」的；不足则依次放宽，保证内容不空
     need = max(6, int(limit * 0.6))
-    if sum(1 for x in out if x["_w"] == 2) < need or len(out) < need:
-        out = collect(hours * 2)
-    if sum(1 for x in out if x["_w"] == 2) < need or len(out) < need:
-        out = collect(hours * 4)
-    # 重要公告优先，其次时间新
-    out.sort(key=lambda x: (-x["_w"], -x["_ts"]))
+    out = collect(hours, drop=True)
+    if len(out) < need:
+        out = collect(hours, drop=False)
+    if len(out) < need:
+        out = collect(hours * 2, drop=False)
+    if len(out) < need:
+        out = collect(hours * 4, drop=False)
     out = out[:limit]
     for x in out:
         x.pop("_w", None)
