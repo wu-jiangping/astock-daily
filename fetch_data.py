@@ -268,10 +268,11 @@ def explain_news(title, digest):
 
 
 def explain_announce(title):
-    # 并购重组类公告：用户指定按「重大利好」重点关注
-    if is_merger_ann(title):
+    # 被收购 / 被重组的一方：用户指定按「重大利好」重点关注
+    hit, role = merger_role(title)
+    if hit:
         return ("利好", "重大利好", "#c62828",
-                "重大利好：并购重组类事项，市场通常视为资本运作利好，关注方案进度与监管审核")
+                "重大利好：%s，公司作为被收购 / 被重组的一方，关注方案进度与监管审核" % role)
     s, hits = score_text(title)
     tag, label, color = judge(s)
     hint = ("关键词：" + "、".join(list(dict.fromkeys(hits))[:4])) if hits else "常规披露，无显著多空信号"
@@ -576,20 +577,64 @@ ANN_TRIVIAL = ["投资者关系", "调研", "接待机构", "活动记录", "董
                "股东大会", "公司章程", "管理制度", "独立董事", "募集资金", "提示性",
                "法律意见", "审计报告", "更正", "补充", "制度", "细则", "工作制度"]
 
-# 并购重组类公告：重点关注对象，按「重大利好」处理（用户指定）
-ANN_MERGER = ["并购", "重组", "收购", "吸收合并", "发行股份购买资产", "借壳",
-              "资产注入", "重大资产", "资产出售", "资产购买", "控制权变更",
-              "实控人变更", "易主", "要约", "股权收购"]
+# ---------------------------------------------------------------- 重点关注：被收购的一方
+# 用户口径（2026-11-18）：只关注「上市公司自身作为被收购 / 被注入资产 / 易主 /
+# 被重组主体」的公告，也就是"被收购的一方公司"，而不是出钱买别人或卖自己资产的一方。
+#   正例：国投中鲁 2025-06-24《关于筹划重大资产重组的停牌公告》
+#         （控股股东把电子院资产注入上市平台，公司自身被重组、主业将变更）
+#   反例：*ST闻泰《关于重大资产出售的进展公告》（本公司是卖方，不是被收购方）
+#         芳源转债《关于向下修正转股价格暨转股停牌的公告》（含"停牌"但纯属噪声）
+# 仅凭标题判断角色，不读正文，保证云端自动化稳定零成本。
+
+# 明确不是「被收购的一方」：本公司是卖方 / 纯买方 / 可转债噪声
+ANN_NOT_TARGET = [
+    # 本公司卖资产（卖方）
+    "重大资产出售", "出售资产", "出售股权", "出售子公司", "资产剥离", "剥离资产",
+    "转让子公司", "挂牌转让", "公开挂牌", "转让所持",
+    # 本公司出钱买别人（纯买方对外投资）
+    "对外投资", "增资", "竞买", "竞拍", "摘牌", "设立子公司", "共同投资",
+    "收购少数股权", "增持计划", "增持股份计划",
+    # 可转债 / 例行停牌噪声
+    "向下修正", "转股价格", "可转债", "转债", "回售", "赎回", "本息兑付",
+]
+# 「被收购的一方」关键词，按角色分组（越靠前优先级越高）
+ANN_TARGET_GROUPS = [
+    (["控制权变更", "控制权拟", "控制权发生", "实控人变更", "实控人拟变更",
+      "实际控制人变更", "实际控制人发生变更", "实际控制人拟变更",
+      "控股股东变更", "控股股东拟变更", "易主", "被收购", "收购本公司", "收购公司股份"],
+     "易主 / 控制权变更"),
+    (["要约收购", "全面要约", "被吸收合并", "吸收合并本公司",
+      "换股吸收合并本公司", "被合并", "私有化"],
+     "被要约 / 被合并"),
+    (["重组上市", "借壳"], "被借壳 / 重组上市"),
+    (["资产注入", "整体上市", "重大资产置换", "资产置换", "筹划重大资产重组",
+      "重大资产重组", "发行股份购买资产", "发行股份及支付现金购买资产",
+      "购买资产暨关联交易", "与公司有关的重大资产重组", "重大资产购买"],
+     "资产注入 / 自身重组"),
+]
 # 明确终止/否决的除外，避免把「终止重组」误标成利好
 ANN_MERGER_NEG = ["终止", "中止", "撤回", "否决", "未获通过", "失败", "暂停"]
 
 
-def is_merger_ann(title):
-    """是否并购重组类公告（重点关注对象）。"""
+def merger_role(title):
+    """判断是否为「被收购的一方」公告，返回 (是否命中, 角色标签)。
+
+    先排除明确属于买方 / 卖方 / 噪声的标题，再按角色分组匹配。
+    """
     t = str(title or "")
     if any(w in t for w in ANN_MERGER_NEG):
-        return False
-    return any(w in t for w in ANN_MERGER)
+        return False, ""
+    if any(w in t for w in ANN_NOT_TARGET):
+        return False, ""
+    for kws, role in ANN_TARGET_GROUPS:
+        if any(w in t for w in kws):
+            return True, role
+    return False, ""
+
+
+def is_merger_ann(title):
+    """兼容旧调用：是否属于重点关注的「被收购的一方」公告。"""
+    return merger_role(title)[0]
 
 
 def ann_weight(title, col_name=""):
@@ -672,10 +717,12 @@ def fetch_announcements(limit=12, hours=24):
 
 
 def fetch_merger_announcements(limit=3, hours=24, pages=5):
-    """定向抓取并购重组类公告（重点关注，按重大利好处理）。
+    """定向抓取「被收购的一方」公告（重点关注，按重大利好处理）。
 
+    只收录上市公司自身作为被收购 / 被注入资产 / 易主 / 被重组主体的一方，
+    排除本公司卖资产（重大资产出售）、纯买方对外投资及可转债停牌噪声。
     单独翻多页抓取：常规公告接口只给最近 100 条，盘后公告密集时
-    并购重组公告会被挤出前 100 条，故不能只从常规公告列表里筛。
+    这类公告会被挤出前 100 条，故不能只从常规公告列表里筛。
     """
     cutoff = now_cn() - timedelta(hours=hours)
     seen = set()
@@ -699,7 +746,8 @@ def fetch_merger_announcements(limit=3, hours=24, pages=5):
             if dt < cutoff:
                 continue
             title = (a.get("title_ch") or a.get("title") or "").strip()
-            if not is_merger_ann(title):
+            hit, role = merger_role(title)
+            if not hit:
                 continue
             codes = a.get("codes") or []
             if not codes:
@@ -732,11 +780,20 @@ def fetch_merger_announcements(limit=3, hours=24, pages=5):
                 "链接": "https://data.eastmoney.com/notices/detail/%s/%s.html" % (
                     c0.get("stock_code"), a.get("art_code")),
                 "档位": tag, "标签": label, "配色": color, "解读": txt,
-                "重点关注": True,
+                "角色": role, "重点关注": True,
                 "_ts": dt.timestamp(),
             })
     out.sort(key=lambda x: -x["_ts"])
-    out = out[:limit]
+    # 同一家公司只保留最新一条：同一重组事项常连发数条进展公告，避免刷屏
+    seen_code = set()
+    uniq = []
+    for x in out:
+        code = x.get("代码") or ""
+        if code and code in seen_code:
+            continue
+        seen_code.add(code)
+        uniq.append(x)
+    out = uniq[:limit]
     for x in out:
         x.pop("_ts", None)
     return out
