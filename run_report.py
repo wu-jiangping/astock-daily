@@ -97,6 +97,9 @@ def run(session, do_push=True):
         len(data["全球市场"]), len(data["要闻"]), len(data["公告"]), len(focus),
         len(lhb.get("买入") or []), len(lhb.get("卖出") or []), lhb.get("交易日", "-"),
         time.time() - t0))
+    for x in focus:
+        log("      重点 · %s(%s) [%s] %s" % (
+            x.get("名称"), x.get("代码"), x.get("角色"), (x.get("公告标题") or "")[:40]))
 
     # 落盘结构化数据，便于排查
     try:
