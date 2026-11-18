@@ -268,6 +268,10 @@ def explain_news(title, digest):
 
 
 def explain_announce(title):
+    # 并购重组类公告：用户指定按「重大利好」重点关注
+    if is_merger_ann(title):
+        return ("利好", "重大利好", "#c62828",
+                "重大利好：并购重组类事项，市场通常视为资本运作利好，关注方案进度与监管审核")
     s, hits = score_text(title)
     tag, label, color = judge(s)
     hint = ("关键词：" + "、".join(list(dict.fromkeys(hits))[:4])) if hits else "常规披露，无显著多空信号"
@@ -572,6 +576,21 @@ ANN_TRIVIAL = ["投资者关系", "调研", "接待机构", "活动记录", "董
                "股东大会", "公司章程", "管理制度", "独立董事", "募集资金", "提示性",
                "法律意见", "审计报告", "更正", "补充", "制度", "细则", "工作制度"]
 
+# 并购重组类公告：重点关注对象，按「重大利好」处理（用户指定）
+ANN_MERGER = ["并购", "重组", "收购", "吸收合并", "发行股份购买资产", "借壳",
+              "资产注入", "重大资产", "资产出售", "资产购买", "控制权变更",
+              "实控人变更", "易主", "要约", "股权收购"]
+# 明确终止/否决的除外，避免把「终止重组」误标成利好
+ANN_MERGER_NEG = ["终止", "中止", "撤回", "否决", "未获通过", "失败", "暂停"]
+
+
+def is_merger_ann(title):
+    """是否并购重组类公告（重点关注对象）。"""
+    t = str(title or "")
+    if any(w in t for w in ANN_MERGER_NEG):
+        return False
+    return any(w in t for w in ANN_MERGER)
+
 
 def ann_weight(title, col_name=""):
     """公告重要性权重：2=重要, 1=普通, 0=例行。"""
@@ -648,6 +667,77 @@ def fetch_announcements(limit=12, hours=24):
     out = out[:limit]
     for x in out:
         x.pop("_w", None)
+        x.pop("_ts", None)
+    return out
+
+
+def fetch_merger_announcements(limit=3, hours=24, pages=5):
+    """定向抓取并购重组类公告（重点关注，按重大利好处理）。
+
+    单独翻多页抓取：常规公告接口只给最近 100 条，盘后公告密集时
+    并购重组公告会被挤出前 100 条，故不能只从常规公告列表里筛。
+    """
+    cutoff = now_cn() - timedelta(hours=hours)
+    seen = set()
+    out = []
+    base = ("https://np-anotice-stock.eastmoney.com/api/security/ann"
+            "?sr=-1&page_size=100&page_index=%d&ann_type=A&client_source=web&f_node=0&s_node=0")
+    for pi in range(1, pages + 1):
+        try:
+            js = json.loads(http_get(base % pi, referer="https://data.eastmoney.com/notices/"))
+        except Exception:
+            continue
+        lst = ((js.get("data") or {}).get("list")) or []
+        if not lst:
+            break
+        for a in lst:
+            dt_s = (a.get("display_time") or a.get("notice_date") or "").replace(":000", "").strip()
+            try:
+                dt = datetime.strptime(dt_s[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN_TZ)
+            except Exception:
+                continue
+            if dt < cutoff:
+                continue
+            title = (a.get("title_ch") or a.get("title") or "").strip()
+            if not is_merger_ann(title):
+                continue
+            codes = a.get("codes") or []
+            if not codes:
+                continue
+            # 优先取 A 股股票代码，避免公告 codes[0] 是可转债（如 110081 闻泰转债）
+            c0 = codes[0]
+            for c in codes:
+                sc = str(c.get("stock_code") or "")
+                if len(sc) == 6 and sc[:1] in ("0", "3", "6", "8", "4"):
+                    c0 = c
+                    break
+            sn = c0.get("short_name") or ""
+            if sn and title.startswith(sn):
+                rest = title[len(sn):]
+                if rest[:1] in (":", "："):
+                    title = rest[1:].strip()
+            key = a.get("art_code") or (c0.get("stock_code"), title)
+            if key in seen:
+                continue
+            seen.add(key)
+            cols = a.get("columns") or []
+            col_name = cols[0].get("column_name") if cols else ""
+            tag, label, color, txt = explain_announce(title)
+            out.append({
+                "代码": c0.get("stock_code"),
+                "名称": sn,
+                "公告标题": title[:56],
+                "公告时间": dt_s[5:16] if len(dt_s) >= 16 else dt_s,
+                "公告类型": col_name,
+                "链接": "https://data.eastmoney.com/notices/detail/%s/%s.html" % (
+                    c0.get("stock_code"), a.get("art_code")),
+                "档位": tag, "标签": label, "配色": color, "解读": txt,
+                "重点关注": True,
+                "_ts": dt.timestamp(),
+            })
+    out.sort(key=lambda x: -x["_ts"])
+    out = out[:limit]
+    for x in out:
         x.pop("_ts", None)
     return out
 
@@ -807,6 +897,10 @@ def build(session="早报", cfg=None):
     result["公告"] = safe("公告", lambda: fetch_announcements(
         limit=cfg.get("公告条数", 12),
         hours=cfg.get("公告回溯小时", 24)), [])
+    result["重点关注"] = safe("重点关注", lambda: fetch_merger_announcements(
+        limit=cfg.get("重点关注条数", 3),
+        hours=cfg.get("重点关注回溯小时", 24),
+        pages=cfg.get("重点关注回溯页数", 5)), [])
     result["龙虎榜"] = safe("龙虎榜", lambda: fetch_lhb(
         top_n=cfg.get("龙虎榜买入条数", 6),
         bottom_n=cfg.get("龙虎榜卖出条数", 4),
