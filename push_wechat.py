@@ -98,8 +98,10 @@ def build_text(data, img_url):
 
     focus = (data.get("重点关注") or [])[:2]
     if focus:
-        seg = ["%s %s" % (x.get("名称") or "", (x.get("公告标题") or "")[:22]) for x in focus]
-        L.append("重点关注 · 并购重组（重大利好）：" + " ｜ ".join(seg))
+        seg = ["%s[%s] %s" % (x.get("名称") or "",
+                              (x.get("角色") or "").split(" / ")[0],
+                              (x.get("公告标题") or "")[:22]) for x in focus]
+        L.append("重点关注 · 被收购方（重大利好）：" + " ｜ ".join(seg))
 
     nw = data.get("要闻") or []
     if nw:
