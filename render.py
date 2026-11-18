@@ -185,24 +185,27 @@ def block_news(news):
     return "".join(out)
 
 
-# ---------------- 重点关注：并购重组 ----------------
+# ---------------- 重点关注：被收购的一方 ----------------
 def block_focus(focus):
-    """并购重组类公告：独立高亮板块，按重大利好呈现。"""
+    """被收购 / 被注入资产 / 易主的一方：独立高亮板块，按重大利好呈现。"""
     if not focus:
         return ""
-    out = [section("重", "重点关注 · 并购重组", "本期并购重组公告 · 按重大利好重点关注")]
+    out = [section("重", "重点关注 · 被收购方",
+                   "仅收录上市公司自身作为被收购、被注入资产、易主或被合并的一方 · 按重大利好重点关注")]
     rows = []
     for x in focus:
+        role = x.get("角色") or "被收购 / 被重组"
         rows.append(
             '<div class="focus-row">'
             '<div class="focus-l"><div class="focus-name">%s<span class="arow-code">%s</span></div>'
             '<div class="focus-time">%s</div></div>'
             '<div class="focus-body"><div class="focus-title">%s</div>'
             '<div><span class="focus-tag">重大利好</span>'
-            '<span class="focus-note">并购重组事项，关注方案进度与监管审核；以公司公告为准</span></div>'
+            '<span class="focus-role">%s</span>'
+            '<span class="focus-note">公司作为被收购 / 被重组的一方，关注方案进度与监管审核；以公司公告为准</span></div>'
             '</div></div>'
             % (esc(x.get("名称")), esc(x.get("代码")), esc(x.get("公告时间")),
-               esc(x.get("公告标题"))))
+               esc(x.get("公告标题")), esc(role)))
     out.append('<div class="focus-card">%s</div></div>' % "".join(rows))
     return "".join(out)
 
@@ -371,16 +374,17 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
             ] for x in nw]
             p.append(_wx_table(["时间", "标题", "解读"], rows))
 
-        # 重点关注 · 并购重组
+        # 重点关注 · 被收购方
         focus = (data.get("重点关注") or [])[:lim.get("重点", 2)]
         if focus:
-            p.append("<h3>重点关注 · 并购重组（重大利好）</h3>")
+            p.append("<h3>重点关注 · 被收购方（重大利好）</h3>")
             frows = [[
                 "%s<br><font color=\"#999\">%s</font>" % (esc(x.get("名称")), esc(x.get("代码"))),
-                esc(x.get("公告标题"))[:30],
+                "%s<br><font color=\"#c62828\">%s</font>" % (
+                    esc(x.get("公告标题"))[:30], esc((x.get("角色") or "").split(" / ")[0])),
                 '<font color="#c62828">重大利好</font>',
             ] for x in focus]
-            p.append(_wx_table(["公司", "公告", "解读"], frows))
+            p.append(_wx_table(["公司", "公告 / 角色", "解读"], frows))
 
         # 公告
         an = (data.get("公告") or [])[:lim["公告"]]
@@ -492,7 +496,7 @@ body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#eef1f
 .arow-body { flex:1; }
 .arow-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
 .arow-meta { font-size:11px; color:#a2acb6; }
-/* 重点关注 · 并购重组（重大利好高亮） */
+/* 重点关注 · 被收购方（重大利好高亮） */
 .focus-card { background:#fff5f5; border:1px solid #ffcdd2; border-left:5px solid #c62828;
               border-radius:14px; padding:6px 18px; box-shadow:0 2px 10px rgba(198,40,40,.08); }
 .focus-row { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #f3d7d7; align-items:flex-start; }
@@ -504,6 +508,8 @@ body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#eef1f
 .focus-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
 .focus-tag { display:inline-block; font-size:11px; font-weight:700; color:#fff; background:#c62828;
              border-radius:6px; padding:2px 8px; margin-right:6px; }
+.focus-role { display:inline-block; font-size:11px; font-weight:700; color:#c62828;
+              background:#ffe6e6; border-radius:6px; padding:2px 8px; margin-right:6px; }
 .focus-note { font-size:11.5px; color:#8a5a5a; line-height:1.5; }
 .foot { margin:22px 20px 0; text-align:center; color:#a8b2bb; font-size:11px; line-height:1.7; }
 .foot b { color:#8a939c; }
