@@ -113,6 +113,11 @@ def build_summary(data):
             seg.append("%s %s%.2f%%" % (x["名称"], "+" if (c or 0) > 0 else "", c or 0))
         lines.append("**海外市场**：" + "；".join(seg))
 
+    focus = data.get("重点关注") or []
+    if focus:
+        seg = ["%s %s" % (x.get("名称") or "", (x.get("公告标题") or "")[:24]) for x in focus[:2]]
+        lines.append("**重点关注 · 并购重组（重大利好）**：" + "；".join(seg))
+
     lines.append("**要闻 %d 条 · 公告 %d 条**，详见下图。" % (
         len(data.get("要闻") or []), len(data.get("公告") or [])))
     lines.append("> 解读为程序化规则判断，仅供参考，不构成投资建议。")
