@@ -96,6 +96,11 @@ def build_text(data, img_url):
         mark = "当日 %s" % d if lhb.get("是否当日") else ("%s 未披露" % d if d else "最近交易日")
         L.append("龙虎榜（%s）：%s" % (mark, " ｜ ".join(seg)))
 
+    focus = (data.get("重点关注") or [])[:2]
+    if focus:
+        seg = ["%s %s" % (x.get("名称") or "", (x.get("公告标题") or "")[:22]) for x in focus]
+        L.append("重点关注 · 并购重组（重大利好）：" + " ｜ ".join(seg))
+
     nw = data.get("要闻") or []
     if nw:
         L.append("要闻 %d 条 · 公告 %d 条" % (len(nw), len(data.get("公告") or [])))
