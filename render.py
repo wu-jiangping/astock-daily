@@ -139,9 +139,7 @@ def block_unlock(u):
     allx = 今日 + 临近
     if not allx:
         return ""
-    out = [section("02", "限售解禁", "今日 / 未来7日解禁压力")]
-    if not 今日:
-        out.append('<div class="note">今日无解禁，以下为未来 7 日内临近解禁（按解禁市值排序）</div>')
+    out = [section("02", "限售解禁", "当日解禁")]
     rows = []
     for x in allx:
         rows.append(
@@ -163,10 +161,11 @@ def block_unlock(u):
 
 
 # ---------------- 要闻 ----------------
-def block_news(news):
+def block_news(news, session="早报"):
     if not news:
         return ""
-    out = [section("03", "隔夜全球要闻", "宏观 · 政策 · 海外动态")]
+    title = "隔夜全球要闻" if session == "早报" else "今日要闻"
+    out = [section("03", title, "宏观 · 政策 · 海外动态")]
     rows = []
     for x in news:
         rows.append(
@@ -185,16 +184,15 @@ def block_news(news):
     return "".join(out)
 
 
-# ---------------- 重点关注：被收购的一方 ----------------
+# ---------------- 重点关注 ----------------
 def block_focus(focus):
-    """被收购 / 被注入资产 / 易主的一方：独立高亮板块，按重大利好呈现。"""
+    """重点关注：当日新增的相关公告，中性样式呈现（不特意标红）。"""
     if not focus:
         return ""
-    out = [section("重", "重点关注 · 被收购方",
-                   "仅收录上市公司自身作为被收购、被注入资产、易主或被合并的一方 · 按重大利好重点关注")]
+    out = [section("重", "重点关注", "仅当日新增")]
     rows = []
     for x in focus:
-        role = x.get("角色") or "被收购 / 被重组"
+        role = x.get("角色") or "相关公告"
         rows.append(
             '<div class="focus-row">'
             '<div class="focus-l"><div class="focus-name">%s<span class="arow-code">%s</span></div>'
@@ -202,7 +200,7 @@ def block_focus(focus):
             '<div class="focus-body"><div class="focus-title">%s</div>'
             '<div><span class="focus-tag">重大利好</span>'
             '<span class="focus-role">%s</span>'
-            '<span class="focus-note">公司作为被收购 / 被重组的一方，关注方案进度与监管审核；以公司公告为准</span></div>'
+            '<span class="focus-note">关注方案进度与监管审核；以公司公告为准</span></div>'
             '</div></div>'
             % (esc(x.get("名称")), esc(x.get("代码")), esc(x.get("公告时间")),
                esc(x.get("公告标题")), esc(role)))
@@ -366,7 +364,7 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
         # 要闻
         nw = (data.get("要闻") or [])[:lim["要闻"]]
         if nw:
-            p.append("<h3>03 隔夜要闻</h3>")
+            p.append("<h3>%s</h3>" % ("03 隔夜要闻" if data.get("场次") == "早报" else "03 今日要闻"))
             rows = [[
                 esc(x.get("时间")),
                 esc(x.get("标题"))[:34],
@@ -374,17 +372,17 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
             ] for x in nw]
             p.append(_wx_table(["时间", "标题", "解读"], rows))
 
-        # 重点关注 · 被收购方
+        # 重点关注
         focus = (data.get("重点关注") or [])[:lim.get("重点", 2)]
         if focus:
-            p.append("<h3>重点关注 · 被收购方（重大利好）</h3>")
+            p.append("<h3>重点关注</h3>")
             frows = [[
                 "%s<br><font color=\"#999\">%s</font>" % (esc(x.get("名称")), esc(x.get("代码"))),
-                "%s<br><font color=\"#c62828\">%s</font>" % (
+                "%s<br><font color=\"#999\">%s</font>" % (
                     esc(x.get("公告标题"))[:30], esc((x.get("角色") or "").split(" / ")[0])),
-                '<font color="#c62828">重大利好</font>',
+                '<font color="#666">重大利好</font>',
             ] for x in focus]
-            p.append(_wx_table(["公司", "公告 / 角色", "解读"], frows))
+            p.append(_wx_table(["公司", "公告 / 角色", "标签"], frows))
 
         # 公告
         an = (data.get("公告") or [])[:lim["公告"]]
@@ -496,21 +494,21 @@ body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#eef1f
 .arow-body { flex:1; }
 .arow-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
 .arow-meta { font-size:11px; color:#a2acb6; }
-/* 重点关注 · 被收购方（重大利好高亮） */
-.focus-card { background:#fff5f5; border:1px solid #ffcdd2; border-left:5px solid #c62828;
-              border-radius:14px; padding:6px 18px; box-shadow:0 2px 10px rgba(198,40,40,.08); }
-.focus-row { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #f3d7d7; align-items:flex-start; }
+/* 重点关注（中性样式，不标红） */
+.focus-card { background:#fbfcfd; border:1px solid #e8edf2; border-left:4px solid #b0bec5;
+              border-radius:14px; padding:6px 18px; }
+.focus-row { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #eef1f4; align-items:flex-start; }
 .focus-row:last-child { border-bottom:none; }
 .focus-l { flex:none; width:120px; }
 .focus-name { font-size:14.5px; font-weight:800; color:#263238; }
 .focus-time { font-size:11px; color:#9aa5af; margin-top:3px; }
 .focus-body { flex:1; }
 .focus-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
-.focus-tag { display:inline-block; font-size:11px; font-weight:700; color:#fff; background:#c62828;
+.focus-tag { display:inline-block; font-size:11px; font-weight:700; color:#607d8b; background:#eceff1;
              border-radius:6px; padding:2px 8px; margin-right:6px; }
-.focus-role { display:inline-block; font-size:11px; font-weight:700; color:#c62828;
-              background:#ffe6e6; border-radius:6px; padding:2px 8px; margin-right:6px; }
-.focus-note { font-size:11.5px; color:#8a5a5a; line-height:1.5; }
+.focus-role { display:inline-block; font-size:11px; font-weight:700; color:#78909c;
+              background:#f2f5f7; border-radius:6px; padding:2px 8px; margin-right:6px; }
+.focus-note { font-size:11.5px; color:#9aa5af; line-height:1.5; }
 .foot { margin:22px 20px 0; text-align:center; color:#a8b2bb; font-size:11px; line-height:1.7; }
 .foot b { color:#8a939c; }
 """
@@ -526,7 +524,7 @@ def render(data, session="早报"):
     parts = [top, block_market(data.get("全球市场")),
              block_finance(data.get("财报") or {}),
              block_unlock(data.get("解禁") or {}),
-             block_news(data.get("要闻")),
+             block_news(data.get("要闻"), data.get("场次", "早报")),
              block_focus(data.get("重点关注")),
              block_ann(data.get("公告")),
              block_lhb(data.get("龙虎榜") or {})]
