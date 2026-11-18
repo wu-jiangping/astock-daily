@@ -89,11 +89,12 @@ def run(session, do_push=True):
     log("1/3 抓取数据 ...")
     t0 = time.time()
     data = fetch_data.build(session, cfg)
+    focus = data.get("重点关注") or []
     lhb = data.get("龙虎榜") or {}
-    log("    财报 预喜%d/爆雷%d；解禁 今%d/临%d；市场%d；要闻%d；公告%d；龙虎榜 买%d/卖%d(%s) (%.1fs)" % (
+    log("    财报 预喜%d/爆雷%d；解禁 今%d/临%d；市场%d；要闻%d；公告%d；重点关注%d；龙虎榜 买%d/卖%d(%s) (%.1fs)" % (
         len(data["财报"]["预喜"]), len(data["财报"]["爆雷"]),
         len(data["解禁"]["今日"]), len(data["解禁"]["临近"]),
-        len(data["全球市场"]), len(data["要闻"]), len(data["公告"]),
+        len(data["全球市场"]), len(data["要闻"]), len(data["公告"]), len(focus),
         len(lhb.get("买入") or []), len(lhb.get("卖出") or []), lhb.get("交易日", "-"),
         time.time() - t0))
 
