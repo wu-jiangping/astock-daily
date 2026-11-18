@@ -185,6 +185,28 @@ def block_news(news):
     return "".join(out)
 
 
+# ---------------- 重点关注：并购重组 ----------------
+def block_focus(focus):
+    """并购重组类公告：独立高亮板块，按重大利好呈现。"""
+    if not focus:
+        return ""
+    out = [section("重", "重点关注 · 并购重组", "本期并购重组公告 · 按重大利好重点关注")]
+    rows = []
+    for x in focus:
+        rows.append(
+            '<div class="focus-row">'
+            '<div class="focus-l"><div class="focus-name">%s<span class="arow-code">%s</span></div>'
+            '<div class="focus-time">%s</div></div>'
+            '<div class="focus-body"><div class="focus-title">%s</div>'
+            '<div><span class="focus-tag">重大利好</span>'
+            '<span class="focus-note">并购重组事项，关注方案进度与监管审核；以公司公告为准</span></div>'
+            '</div></div>'
+            % (esc(x.get("名称")), esc(x.get("代码")), esc(x.get("公告时间")),
+               esc(x.get("公告标题"))))
+    out.append('<div class="focus-card">%s</div></div>' % "".join(rows))
+    return "".join(out)
+
+
 # ---------------- 公告 ----------------
 def block_ann(ann):
     if not ann:
@@ -263,11 +285,12 @@ def block_lhb(l):
 # ---------------- 微信版（PushPlus / 手机阅读）----------------
 # 微信公众号不支持 flex/grid，这里用 table + 内联样式，并控制总长度
 WX_LIMITS = [
-    {"财报喜": 5, "财报雷": 3, "解禁": 5, "要闻": 5, "公告": 5, "龙虎买": 4, "龙虎卖": 3},
-    {"财报喜": 4, "财报雷": 2, "解禁": 4, "要闻": 4, "公告": 4, "龙虎买": 3, "龙虎卖": 2},
-    {"财报喜": 3, "财报雷": 2, "解禁": 3, "要闻": 3, "公告": 3, "龙虎买": 2, "龙虎卖": 2},
-    {"财报喜": 3, "财报雷": 1, "解禁": 3, "要闻": 3, "公告": 3, "龙虎买": 2, "龙虎卖": 1},
-    {"财报喜": 2, "财报雷": 1, "解禁": 2, "要闻": 2, "公告": 2, "龙虎买": 1, "龙虎卖": 1},
+    {"财报喜": 5, "财报雷": 3, "解禁": 5, "要闻": 5, "公告": 5, "龙虎买": 4, "龙虎卖": 3, "重点": 2},
+    {"财报喜": 4, "财报雷": 2, "解禁": 4, "要闻": 4, "公告": 4, "龙虎买": 3, "龙虎卖": 2, "重点": 2},
+    {"财报喜": 3, "财报雷": 2, "解禁": 3, "要闻": 3, "公告": 3, "龙虎买": 2, "龙虎卖": 2, "重点": 1},
+    {"财报喜": 3, "财报雷": 1, "解禁": 3, "要闻": 3, "公告": 3, "龙虎买": 2, "龙虎卖": 1, "重点": 1},
+    {"财报喜": 2, "财报雷": 1, "解禁": 2, "要闻": 2, "公告": 2, "龙虎买": 1, "龙虎卖": 1, "重点": 1},
+    {"财报喜": 2, "财报雷": 1, "解禁": 1, "要闻": 1, "公告": 1, "龙虎买": 1, "龙虎卖": 0, "重点": 1},
 ]
 # PushPlus 内容按 UTF-8 字节计（中文 1 字 = 3 字节），必须按字节判定
 WX_MAX_BYTES = 3600
@@ -348,6 +371,17 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
             ] for x in nw]
             p.append(_wx_table(["时间", "标题", "解读"], rows))
 
+        # 重点关注 · 并购重组
+        focus = (data.get("重点关注") or [])[:lim.get("重点", 2)]
+        if focus:
+            p.append("<h3>重点关注 · 并购重组（重大利好）</h3>")
+            frows = [[
+                "%s<br><font color=\"#999\">%s</font>" % (esc(x.get("名称")), esc(x.get("代码"))),
+                esc(x.get("公告标题"))[:30],
+                '<font color="#c62828">重大利好</font>',
+            ] for x in focus]
+            p.append(_wx_table(["公司", "公告", "解读"], frows))
+
         # 公告
         an = (data.get("公告") or [])[:lim["公告"]]
         if an:
@@ -390,8 +424,10 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
     html = build(WX_LIMITS[-1])
     raw = html.encode("utf-8")
     if len(raw) > max_bytes:
-        cut = raw[:max_bytes].decode("utf-8", errors="ignore")
-        cut = cut.rsplit("<", 1)[0] + "</div>"
+        tail = "</div>"
+        # 先扣掉收尾标签的字节，否则截断后再拼接会超出上限（PushPlus 超限会静默丢弃）
+        cut = raw[:max_bytes - len(tail.encode("utf-8"))].decode("utf-8", errors="ignore")
+        cut = cut.rsplit("<", 1)[0] + tail
         return cut
     return html
 
@@ -456,6 +492,19 @@ body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#eef1f
 .arow-body { flex:1; }
 .arow-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
 .arow-meta { font-size:11px; color:#a2acb6; }
+/* 重点关注 · 并购重组（重大利好高亮） */
+.focus-card { background:#fff5f5; border:1px solid #ffcdd2; border-left:5px solid #c62828;
+              border-radius:14px; padding:6px 18px; box-shadow:0 2px 10px rgba(198,40,40,.08); }
+.focus-row { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #f3d7d7; align-items:flex-start; }
+.focus-row:last-child { border-bottom:none; }
+.focus-l { flex:none; width:120px; }
+.focus-name { font-size:14.5px; font-weight:800; color:#263238; }
+.focus-time { font-size:11px; color:#9aa5af; margin-top:3px; }
+.focus-body { flex:1; }
+.focus-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
+.focus-tag { display:inline-block; font-size:11px; font-weight:700; color:#fff; background:#c62828;
+             border-radius:6px; padding:2px 8px; margin-right:6px; }
+.focus-note { font-size:11.5px; color:#8a5a5a; line-height:1.5; }
 .foot { margin:22px 20px 0; text-align:center; color:#a8b2bb; font-size:11px; line-height:1.7; }
 .foot b { color:#8a939c; }
 """
@@ -472,6 +521,7 @@ def render(data, session="早报"):
              block_finance(data.get("财报") or {}),
              block_unlock(data.get("解禁") or {}),
              block_news(data.get("要闻")),
+             block_focus(data.get("重点关注")),
              block_ann(data.get("公告")),
              block_lhb(data.get("龙虎榜") or {})]
 
