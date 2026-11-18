@@ -96,6 +96,19 @@ def now_cn():
     return datetime.now(CN_TZ)
 
 
+def day_start():
+    """当天 00:00（北京时间）。推送只取当天数据，不跨自然日。"""
+    return now_cn().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def day_cutoff(hours=0):
+    """数据起始时间：不早于当天 00:00；hours 只能更严格，不能放宽到昨天。"""
+    ds = day_start()
+    if hours and hours > 0:
+        return max(ds, now_cn() - timedelta(hours=hours))
+    return ds
+
+
 def fmt_num(v, unit="", digits=2):
     """数字格式化：亿/万 自动换算。"""
     if v is None:
@@ -285,7 +298,8 @@ def fetch_financials(days_back=7, top_n=10, bottom_n=5):
     """抓取最近 days_back 天内新披露的财报（业绩报表 RPT_LICO_FN_CPD）。
     返回：业绩预喜 Top + 业绩爆雷 Bottom。"""
     today = now_cn().date()
-    since = today - timedelta(days=days_back)
+    # 只取当天新披露的财报，不回看历史（用户要求：推送只更新当天信息）
+    since = today
     filt = "(NOTICE_DATE>='%s')" % since.isoformat()
     rows = []
     for pg in (1, 2, 3):
@@ -365,7 +379,8 @@ def fetch_financials(days_back=7, top_n=10, bottom_n=5):
 def fetch_unlocks(span_days=7, top_n=10):
     """抓取今日（及未来 span_days 天内）限售股解禁。"""
     today = now_cn().date()
-    end = today + timedelta(days=span_days)
+    # 只看当日解禁，不再前瞻未来（用户要求：当天没有就不展示该板块）
+    end = today
     filt = "(FREE_DATE>='%s')(FREE_DATE<='%s')" % (today.isoformat(), end.isoformat())
     rows = []
     for pg in (1, 2, 3):
@@ -413,8 +428,8 @@ def fetch_unlocks(span_days=7, top_n=10):
     临近 = [x for x in items if x["解禁日期"] != today.isoformat()]
     return {
         "今日": 今日[:top_n],
-        "临近": 临近[:max(0, top_n - len(今日))],
-        "样本数": len(items),
+        "临近": [],
+        "样本数": len(今日),
     }
 
 
@@ -527,7 +542,7 @@ def fetch_news(limit=12, hours=18):
     lst = js.get("LivesList") or []
 
     def collect(hrs):
-        cutoff = now_cn() - timedelta(hours=hrs)
+        cutoff = day_cutoff(hrs)
         buf = []
         for n in lst:
             t = n.get("showtime") or ""
@@ -621,7 +636,11 @@ def merger_role(title):
 
     先排除明确属于买方 / 卖方 / 噪声的标题，再按角色分组匹配。
     """
-    t = str(title or "")
+    import re
+    t = str(title or "").strip()
+    # 公告附件（如 "2-1重大资产重组报告书(注册稿)"）不是正文公告，标题也不规范
+    if re.match(r"^\d+\s*[-－]\s*\d+", t):
+        return False, ""
     if any(w in t for w in ANN_MERGER_NEG):
         return False, ""
     if any(w in t for w in ANN_NOT_TARGET):
@@ -658,7 +677,7 @@ def fetch_announcements(limit=12, hours=24):
     lst = ((js.get("data") or {}).get("list")) or []
 
     def collect(hrs, drop=True):
-        cutoff = now_cn() - timedelta(hours=hrs)
+        cutoff = day_cutoff(hrs)
         buf = []
         for a in lst:
             dt_s = (a.get("display_time") or a.get("notice_date") or "").replace(":000", "").strip()
@@ -716,7 +735,7 @@ def fetch_announcements(limit=12, hours=24):
     return out
 
 
-def fetch_merger_announcements(limit=3, hours=24, pages=5):
+def fetch_merger_announcements(limit=3, hours=24, pages=20):
     """定向抓取「被收购的一方」公告（重点关注，按重大利好处理）。
 
     只收录上市公司自身作为被收购 / 被注入资产 / 易主 / 被重组主体的一方，
@@ -724,7 +743,7 @@ def fetch_merger_announcements(limit=3, hours=24, pages=5):
     单独翻多页抓取：常规公告接口只给最近 100 条，盘后公告密集时
     这类公告会被挤出前 100 条，故不能只从常规公告列表里筛。
     """
-    cutoff = now_cn() - timedelta(hours=hours)
+    cutoff = day_cutoff(hours)
     seen = set()
     out = []
     base = ("https://np-anotice-stock.eastmoney.com/api/security/ann"
@@ -764,6 +783,11 @@ def fetch_merger_announcements(limit=3, hours=24, pages=5):
                 rest = title[len(sn):]
                 if rest[:1] in (":", "："):
                     title = rest[1:].strip()
+            # 以公司全称开头时（"XX股份有限公司关于…"）截掉全称，只留"关于…"
+            import re as _re
+            _m = _re.search(r"(?:股份有限公司|有限责任公司|有限公司)关于", title)
+            if _m and _m.start() < 20:
+                title = title[_m.end() - 2:].strip()
             key = a.get("art_code") or (c0.get("stock_code"), title)
             if key in seen:
                 continue
@@ -780,9 +804,16 @@ def fetch_merger_announcements(limit=3, hours=24, pages=5):
                 "链接": "https://data.eastmoney.com/notices/detail/%s/%s.html" % (
                     c0.get("stock_code"), a.get("art_code")),
                 "档位": tag, "标签": label, "配色": color, "解读": txt,
-                "角色": role, "重点关注": True,
+                "角色": role,                 "重点关注": True,
                 "_ts": dt.timestamp(),
             })
+        # 列表按时间倒序：本页末尾（最早一条）已早于当日起点，后面只会更早，停止翻页
+        tail_s = (lst[-1].get("display_time") or lst[-1].get("notice_date") or "").replace(":000", "").strip()
+        try:
+            if datetime.strptime(tail_s[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=CN_TZ) < cutoff:
+                break
+        except Exception:
+            pass
     out.sort(key=lambda x: -x["_ts"])
     # 同一家公司只保留最新一条：同一重组事项常连发数条进展公告，避免刷屏
     seen_code = set()
@@ -918,8 +949,11 @@ def fetch_lhb(top_n=6, bottom_n=4, days_back=5):
     卖出 = [x for x in with_net if x["净买入"] < 0]
     卖出.sort(key=lambda x: x["净买入"])
     卖出 = 卖出[:bottom_n]
+    if latest != today.isoformat():
+        # 用户要求：只展示当天数据；当日龙虎榜未披露时整块不展示（不再回退上一交易日）
+        return {"买入": [], "卖出": [], "交易日": latest, "样本数": 0, "是否当日": False}
     return {"买入": 买入, "卖出": 卖出, "交易日": latest, "样本数": len(items),
-            "是否当日": latest == today.isoformat()}
+            "是否当日": True}
 
 
 # ---------------------------------------------------------------- 汇总
@@ -957,7 +991,7 @@ def build(session="早报", cfg=None):
     result["重点关注"] = safe("重点关注", lambda: fetch_merger_announcements(
         limit=cfg.get("重点关注条数", 3),
         hours=cfg.get("重点关注回溯小时", 24),
-        pages=cfg.get("重点关注回溯页数", 5)), [])
+        pages=cfg.get("重点关注回溯页数", 20)), [])
     result["龙虎榜"] = safe("龙虎榜", lambda: fetch_lhb(
         top_n=cfg.get("龙虎榜买入条数", 6),
         bottom_n=cfg.get("龙虎榜卖出条数", 4),
