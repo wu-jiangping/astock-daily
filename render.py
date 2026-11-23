@@ -21,6 +21,7 @@ SESSION_META = {
     "晚报": ("A股晚报", "#1a237e", "收盘总结 · 展望明日"),
 }
 SESSION_TAG = {"早报": "am", "午报": "noon", "晚报": "pm"}
+SESSION_EN = {"早报": "AM", "午报": "MD", "晚报": "PM"}
 
 
 def esc(s):
@@ -42,35 +43,68 @@ def up_down_color(v):
     return "#666"
 
 
-def chip(text, color, bg):
-    return ('<span class="chip" style="color:%s;background:%s;border-color:%s">%s</span>'
-            % (color, bg, color, esc(text)))
+CHIP_BG = {"#c62828": "#fdecec", "#e57373": "#fdf1f1", "#2e7d32": "#e9f5ea",
+           "#66bb6a": "#eef7ef", "#8e8e8e": "#f1f3f5"}
+
+
+def chip(text, color=None, bg=None):
+    """圆角胶囊标签：浅色底 + 同色细边，比纯白底描边更精致。"""
+    c = color if (isinstance(color, str) and len(color) == 7 and color.startswith("#")) else "#8e8e8e"
+    return ('<span class="chip" style="color:%s;background:%s;border-color:%s33">%s</span>'
+            % (c, CHIP_BG.get(c, "#f2f5f8"), c, esc(text)))
 
 
 def section(num, title, sub=""):
-    return ('<div class="sec"><div class="sec-head"><span class="sec-num">%s</span>'
-            '<span class="sec-title">%s</span><span class="sec-sub">%s</span></div>'
-            % (num, esc(title), esc(sub)))
+    """板块头：渐变编号徽章 + 主副标题双层 + 右侧渐隐分隔线。"""
+    sub_html = ('<span class="sec-sub">%s</span>' % esc(sub)) if sub else ""
+    return ('<div class="sec"><div class="sec-head">'
+            '<span class="sec-num">%s</span>'
+            '<span class="sec-txt"><span class="sec-title">%s</span>%s</span>'
+            '<span class="sec-line"></span></div>'
+            % (num, esc(title), sub_html))
 
 
 # ---------------- 全球市场 ----------------
-def block_market(m):
+def block_market(m, session="早报"):
     if not m:
         return ""
     cells = []
+    up = down = flat = 0
     for x in m:
         chg = x.get("涨跌幅")
+        v = chg or 0
         c = up_down_color(chg)
-        arrow = "▲" if (chg or 0) > 0 else ("▼" if (chg or 0) < 0 else "•")
-        chg_txt = ("+" if (chg or 0) > 0 else "") + ("%.2f%%" % chg if chg is not None else "—")
+        if v > 0:
+            up += 1
+        elif v < 0:
+            down += 1
+        else:
+            flat += 1
+        arrow = "▲" if v > 0 else ("▼" if v < 0 else "•")
+        chg_txt = ("+" if v > 0 else "") + ("%.2f%%" % chg if chg is not None else "—")
+        if v > 0:
+            bg, bar = "#fdecec", "#e57373"
+        elif v < 0:
+            bg, bar = "#e8f5e9", "#66bb6a"
+        else:
+            bg, bar = "#f1f4f8", "#cfd8e3"
+        width = min(100, 10 + abs(v) * 12)
         price = x.get("现价")
         cells.append(
-            '<div class="mkt"><div class="mkt-name">%s</div>'
+            '<div class="mkt" style="border-top-color:%s">'
+            '<div class="mkt-name">%s</div>'
             '<div class="mkt-price">%s</div>'
-            '<div class="mkt-chg" style="color:%s">%s %s</div></div>'
-            % (esc(x.get("名称")), ("%.2f" % price) if price is not None else "—", c, arrow, chg_txt))
-    return ('<div class="mkt-wrap"><div class="mkt-title">隔夜全球市场</div>'
-            '<div class="mkt-grid">%s</div></div>' % "".join(cells))
+            '<div class="mkt-chg" style="color:%s;background:%s">%s %s</div>'
+            '<div class="mkt-bar"><i style="width:%.0f%%;background:%s"></i></div></div>'
+            % (bar, esc(x.get("名称")), ("%.2f" % price) if price is not None else "—",
+               c, bg, arrow, chg_txt, width, bar))
+    title = "隔夜全球市场" if session == "早报" else "全球市场行情"
+    hint = "涨 %d · 跌 %d · 平 %d" % (up, down, flat)
+    cols = 5 if len(m) >= 10 else 4
+    return ('<div class="mkt-wrap"><div class="mkt-head"><div class="mkt-title">%s</div>'
+            '<div class="mkt-hint">%s</div></div>'
+            '<div class="mkt-grid" style="grid-template-columns:repeat(%d,1fr)">%s</div></div>'
+            % (title, hint, cols, "".join(cells)))
 
 
 # ---------------- 财报 ----------------
@@ -121,7 +155,7 @@ def block_finance(fin):
     雷 = fin.get("爆雷") or []
     if not 喜 and not 雷:
         return ""
-    out = [section("01", "最新财报", "近7日新披露 · 业绩预喜 / 爆雷")]
+    out = [section("01", "最新财报", "仅当日新披露 · 业绩预喜 / 爆雷")]
     if 喜:
         out.append('<div class="subhead up">▲ 业绩预喜</div>')
         out.append('<div class="card">%s</div>' % "".join(fin_row(x) for x in 喜))
@@ -212,7 +246,7 @@ def block_focus(focus):
 def block_ann(ann):
     if not ann:
         return ""
-    out = [section("04", "公司公告", "重要公告优先")]
+    out = [section("04", "公司公告", "仅当日新增 · 按时效排序")]
     rows = []
     for x in ann:
         rows.append(
@@ -292,9 +326,14 @@ WX_LIMITS = [
     {"财报喜": 3, "财报雷": 1, "解禁": 3, "要闻": 3, "公告": 3, "龙虎买": 2, "龙虎卖": 1, "重点": 1},
     {"财报喜": 2, "财报雷": 1, "解禁": 2, "要闻": 2, "公告": 2, "龙虎买": 1, "龙虎卖": 1, "重点": 1},
     {"财报喜": 2, "财报雷": 1, "解禁": 1, "要闻": 1, "公告": 1, "龙虎买": 1, "龙虎卖": 0, "重点": 1},
+    {"财报喜": 1, "财报雷": 1, "解禁": 1, "要闻": 1, "公告": 1, "龙虎买": 1, "龙虎卖": 0, "重点": 1},
+    {"财报喜": 1, "财报雷": 0, "解禁": 1, "要闻": 1, "公告": 1, "龙虎买": 0, "龙虎卖": 0, "重点": 1},
 ]
 # PushPlus 内容按 UTF-8 字节计（中文 1 字 = 3 字节），必须按字节判定
 WX_MAX_BYTES = 3600
+WX_FOOT = ('<div style="font-size:12px;color:#999;margin-top:12px;'
+           'border-top:1px solid #eee;padding-top:8px">'
+           '数据源：东方财富/新浪财经｜解读为程序化规则判断，不构成投资建议</div>')
 
 
 def _wx_table(headers, rows):
@@ -302,10 +341,11 @@ def _wx_table(headers, rows):
     trs = []
     for r in rows:
         trs.append("<tr>" + "".join("<td>%s</td>" % c for c in r) + "</tr>")
-    return ('<table border="1" cellpadding="3" cellspacing="0" '
+    return ('<table border="1" cellpadding="5" cellspacing="0" '
             'style="border-collapse:collapse;font-size:13px;width:100%%;'
-            'border-color:#ddd">'
-            '<tr style="background:#f5f7fa">%s</tr>%s</table>' % (th, "".join(trs)))
+            'border-color:#e3e9f0">'
+            '<tr style="background:#eaf0f6;color:#37474f">%s</tr>%s</table>'
+            % (th, "".join(trs)))
 
 
 def _c(v, txt):
@@ -316,12 +356,14 @@ def _c(v, txt):
 
 def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
     """生成适合微信阅读的紧凑 HTML（自动按 UTF-8 字节降级条数）。"""
-    title = SESSION_META.get(session, SESSION_META["早报"])[0]
+    title, theme, _slogan = SESSION_META.get(session, SESSION_META["早报"])
 
     def build(lim):
         p = []
-        p.append('<div style="font-size:17px;font-weight:bold">%s · %s 星期%s</div>'
-                 % (esc(title), esc(data.get("日期")), esc(data.get("星期"))))
+        p.append('<div style="padding:9px 12px;margin-bottom:8px;border-radius:8px;'
+                 'background:%s;color:#fff;font-size:16px;font-weight:bold">'
+                 '%s · %s 星期%s</div>'
+                 % (theme, esc(title), esc(data.get("日期")), esc(data.get("星期"))))
 
         mkt = data.get("全球市场") or []
         if mkt:
@@ -414,114 +456,176 @@ def render_wechat(data, session="早报", max_bytes=WX_MAX_BYTES):
                 ])
             p.append(_wx_table(["名称", "净买入", "涨跌", "解读"], rows))
 
-        p.append('<div style="font-size:12px;color:#999;margin-top:10px">'
-                 '数据源：东方财富/新浪财经｜解读为程序化规则判断，不构成投资建议</div>')
+        p.append(WX_FOOT)
         return "".join(p)
 
     for lim in WX_LIMITS:
         html = build(lim)
         if len(html.encode("utf-8")) <= max_bytes:
             return html
-    # 兜底：仍超限则按字节硬截断（保证不破坏标签结构地丢尾部）
+    # 兜底：仍超限则按字节硬截断，但预留尾部免责声明，避免整段被截掉
     html = build(WX_LIMITS[-1])
     raw = html.encode("utf-8")
     if len(raw) > max_bytes:
         tail = "</div>"
-        # 先扣掉收尾标签的字节，否则截断后再拼接会超出上限（PushPlus 超限会静默丢弃）
-        cut = raw[:max_bytes - len(tail.encode("utf-8"))].decode("utf-8", errors="ignore")
-        cut = cut.rsplit("<", 1)[0] + tail
-        return cut
+        reserve = len((tail + WX_FOOT).encode("utf-8"))
+        room = max(0, max_bytes - reserve)
+        cut = raw[:room].decode("utf-8", errors="ignore")
+        cut = cut.rsplit("<", 1)[0]
+        return cut + tail + WX_FOOT
     return html
 
 
 CSS = """
 * { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#eef1f5;
-       color:#26292e; -webkit-font-smoothing:antialiased; width:%dpx; }
-.page { padding:0 0 24px 0; }
-.top { background:linear-gradient(135deg,%s 0%%,#37474f 100%%); color:#fff; padding:30px 34px 26px; }
-.top-title { font-size:34px; font-weight:800; letter-spacing:1px; }
-.top-sub { margin-top:8px; font-size:14px; opacity:.92; }
-.top-date { margin-top:14px; font-size:13px; opacity:.85; display:flex; gap:14px; }
-.mkt-wrap { margin:16px 20px 0; background:#fff; border-radius:14px; padding:16px 18px;
-            box-shadow:0 2px 10px rgba(0,0,0,.05); }
-.mkt-title { font-size:15px; font-weight:700; color:#37474f; margin-bottom:12px;
-             padding-left:9px; border-left:4px solid %s; }
-.mkt-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
-.mkt { background:#f7f9fb; border-radius:10px; padding:12px 10px; text-align:center;
-       border:1px solid #eef2f6; }
-.mkt-name { font-size:12px; color:#7a8694; }
-.mkt-price { font-size:17px; font-weight:800; margin:6px 0 4px; color:#222; }
-.mkt-chg { font-size:13px; font-weight:700; }
-.sec { margin:20px 20px 0; }
-.sec-head { display:flex; align-items:center; margin-bottom:12px; }
-.sec-num { background:%s; color:#fff; font-weight:800; font-size:14px; border-radius:8px;
-           padding:4px 10px; margin-right:10px; }
-.sec-title { font-size:20px; font-weight:800; color:#263238; }
-.sec-sub { margin-left:12px; font-size:12px; color:#9aa5af; }
-.card { background:#fff; border-radius:14px; padding:6px 18px;
-        box-shadow:0 2px 10px rgba(0,0,0,.05); }
-.subhead { font-size:14px; font-weight:700; margin:6px 4px 10px; }
+body { font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC',sans-serif;
+       background:#eef2f7; color:#1f2a37; -webkit-font-smoothing:antialiased; width:__IMG_W__px; }
+.page { padding:0 0 26px; }
+.num, .mkt-price, .mkt-chg, .fstat b, .frow-code, .urow-code, .arow-code,
+.nrow-time, .arow-time, .focus-time { font-family:'DIN Alternate','Bahnschrift','Segoe UI',Consolas,sans-serif;
+       font-variant-numeric:tabular-nums; letter-spacing:.2px; }
+
+/* ---------- 页头 ---------- */
+.top { position:relative; overflow:hidden; padding:26px 36px 30px; color:#fff;
+       background:radial-gradient(circle at 86% 8%,rgba(255,255,255,.18) 0,rgba(255,255,255,0) 46%),
+                  linear-gradient(118deg,__THEME__ 0%,#1b2b45 58%,#101a2b 100%); }
+.top::before { content:""; position:absolute; inset:0; pointer-events:none;
+       background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+                        linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+       background-size:30px 30px; }
+.top::after { content:""; position:absolute; left:0; right:0; bottom:0; height:4px;
+       background:linear-gradient(90deg,#ef5350 0%,#ffa726 34%,#42a5f5 68%,rgba(255,255,255,.9) 100%); }
+.top-brand { position:relative; display:flex; align-items:center; justify-content:space-between; }
+.brand-l { display:flex; align-items:center; gap:9px; }
+.brand-mark { width:23px; height:23px; border-radius:7px; display:flex; align-items:center;
+       justify-content:center; font-size:12px; font-weight:800;
+       background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.38); }
+.brand-txt { font-size:10.5px; letter-spacing:2.6px; font-weight:700; opacity:.82; }
+.brand-tag { font-size:11px; letter-spacing:1.4px; padding:4px 13px; border-radius:20px;
+       background:rgba(255,255,255,.13); border:1px solid rgba(255,255,255,.26); }
+.top-wm { position:absolute; right:26px; top:48px; font-size:118px; font-weight:900;
+       letter-spacing:4px; line-height:1; color:rgba(255,255,255,.065); pointer-events:none; }
+.top-title { position:relative; margin-top:22px; font-size:38px; font-weight:800;
+       letter-spacing:3px; text-shadow:0 2px 12px rgba(0,0,0,.18); }
+.top-sub { position:relative; margin-top:9px; font-size:13.5px; opacity:.9; letter-spacing:.6px; }
+.top-date { position:relative; display:flex; gap:9px; margin-top:17px; }
+.top-date span { font-size:12px; padding:5px 11px; border-radius:7px;
+       background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.17); }
+
+/* ---------- 全球市场 ---------- */
+.mkt-wrap { position:relative; overflow:hidden; margin:18px 20px 0; padding:16px 18px 17px;
+       background:#fff; border:1px solid #e7edf4; border-radius:16px;
+       box-shadow:0 6px 22px rgba(31,45,61,.06); }
+.mkt-wrap::before { content:""; position:absolute; left:0; top:0; right:0; height:3px;
+       background:linear-gradient(90deg,__THEME__,rgba(255,255,255,0)); }
+.mkt-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:13px; }
+.mkt-title { font-size:15px; font-weight:800; color:#243447; padding-left:11px;
+       border-left:4px solid __THEME__; }
+.mkt-hint { font-size:11px; color:#a3afbb; letter-spacing:.4px; }
+.mkt-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:11px; }
+.mkt { position:relative; padding:12px 12px 11px; border-radius:12px; overflow:hidden;
+       background:linear-gradient(180deg,#fcfdff 0%,#f5f8fc 100%); border:1px solid #e9eef4;
+       border-top:2px solid #dfe6ee; }
+.mkt-name { font-size:12px; color:#7b8896; font-weight:600; }
+.mkt-price { margin:7px 0 6px; font-size:19px; font-weight:800; color:#1f2a37; }
+.mkt-chg { display:inline-block; font-size:12px; font-weight:800; padding:2px 9px; border-radius:6px; }
+.mkt-bar { height:3px; margin-top:10px; border-radius:3px; background:#e9eef4; overflow:hidden; }
+.mkt-bar i { display:block; height:100%; border-radius:3px; }
+
+/* ---------- 板块 ---------- */
+.sec { margin:24px 20px 0; }
+.sec-head { display:flex; align-items:center; gap:11px; margin-bottom:12px; }
+.sec-num { flex:none; padding:6px 11px; border-radius:9px; color:#fff; font-size:13px;
+       font-weight:800; letter-spacing:.6px; background:linear-gradient(135deg,__THEME__,#37474f);
+       box-shadow:0 3px 9px rgba(26,35,90,.2); }
+.sec-txt { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.sec-title { font-size:21px; font-weight:800; color:#1f2a37; letter-spacing:.6px; line-height:1.15; }
+.sec-sub { font-size:11.5px; color:#95a2ae; line-height:1.35; }
+.sec-line { flex:1; height:1px; align-self:center;
+       background:linear-gradient(90deg,#dbe4ee,rgba(219,228,238,0)); }
+.card { padding:4px 18px; background:#fff; border:1px solid #e7edf4; border-radius:16px;
+       box-shadow:0 6px 20px rgba(31,45,61,.055); }
+.subhead { font-size:13.5px; font-weight:800; margin:12px 4px 8px; letter-spacing:.4px; }
 .subhead.up { color:#c62828; } .subhead.down { color:#2e7d32; }
-.note { font-size:12px; color:#8a939c; margin:0 4px 10px; }
-.chip { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px;
-        border-radius:6px; border:1px solid; margin-right:6px; white-space:nowrap; }
-.fstat label { color:#9aa5af; font-size:11px; font-weight:400; margin-right:4px; }
-.fstat b { font-weight:700; font-size:14px; }
-.frow,.urow { display:flex; align-items:center; gap:12px; padding:13px 0; border-bottom:1px dashed #edf0f3; }
+.note { margin:9px 4px 2px; font-size:11.5px; color:#95a2ae; line-height:1.6; }
+.chip { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px;
+       font-weight:800; border:1px solid; white-space:nowrap; letter-spacing:.2px; margin-right:6px; }
+.fstat label { margin-right:5px; font-size:11px; color:#a3afbb; font-weight:400; }
+.fstat b { font-size:14px; font-weight:800; color:#33414f; }
+.frow,.urow { display:flex; align-items:center; gap:14px; padding:14px 2px;
+       border-bottom:1px solid #f0f3f7; }
 .frow:last-child,.urow:last-child { border-bottom:none; }
-.frow-l,.urow-l { width:150px; flex:none; }
-.frow-name,.urow-name { font-size:15px; font-weight:800; color:#263238; }
-.frow-code,.urow-code { color:#b0b8c1; font-size:12px; margin-left:6px; font-weight:400; }
-.frow-sub,.urow-sub { font-size:11px; color:#9aa5af; margin-top:3px; }
-.frow-m,.urow-m { flex:1; display:flex; flex-direction:column; gap:4px; }
-.frow-r,.urow-r { width:300px; flex:none; display:flex; flex-direction:column; gap:5px; align-items:flex-start; }
-.frow-exp,.urow-exp { font-size:11.5px; color:#5b6470; line-height:1.5;
-                      border-left:3px solid; padding-left:8px; }
-.nrow { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #edf0f3; }
-.nrow:last-child { border-bottom:none; }
-.nrow-time { flex:none; width:64px; color:#9aa5af; font-size:12px; font-weight:700; padding-top:2px; }
+.frow-l,.urow-l { flex:none; width:150px; }
+.frow-name,.urow-name,.arow-name,.focus-name { font-size:15px; font-weight:800; color:#1f2a37; }
+.frow-code,.urow-code,.arow-code { display:inline-block; margin-left:6px; padding:1px 6px;
+       border-radius:5px; background:#f1f4f8; color:#94a1ae; font-size:11px; font-weight:600; }
+.frow-sub,.urow-sub { margin-top:5px; font-size:11px; color:#9aa7b4; line-height:1.45;
+       display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.frow-m,.urow-m { flex:1; display:flex; flex-direction:column; gap:5px; }
+.frow-r,.urow-r { flex:none; width:300px; display:flex; flex-direction:column;
+       gap:6px; align-items:flex-start; }
+.frow-exp,.urow-exp { padding:6px 9px; border-left:3px solid; border-radius:0 7px 7px 0;
+       background:#f7f9fc; font-size:11.5px; color:#5c6976; line-height:1.55; }
+
+/* ---------- 要闻 / 公告 ---------- */
+.nrow { display:flex; gap:14px; padding:14px 2px; border-bottom:1px solid #f0f3f7; }
+.nrow:last-child,.arow:last-child { border-bottom:none; }
+.nrow-time { position:relative; flex:none; width:70px; padding-left:11px; font-size:12px;
+       font-weight:800; color:#7b8896; border-left:2px solid #e3eaf2; }
+.nrow-time::before { content:""; position:absolute; left:-4px; top:5px; width:6px; height:6px;
+       border-radius:50%; background:__THEME__; box-shadow:0 0 0 3px rgba(26,35,126,.09); }
 .nrow-body { flex:1; }
-.nrow-title { font-size:14.5px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
-.nrow-digest { font-size:12px; color:#707b86; line-height:1.5; margin-bottom:5px; }
-.nrow-meta { font-size:11px; color:#a2acb6; }
-.arow { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #edf0f3; align-items:flex-start; }
-.arow:last-child { border-bottom:none; }
-.arow-l { flex:none; width:120px; }
-.arow-name { font-size:14.5px; font-weight:800; color:#263238; }
-.arow-code { color:#b0b8c1; font-size:11px; margin-left:5px; font-weight:400; }
-.arow-time { font-size:11px; color:#9aa5af; margin-top:3px; }
+.nrow-title { margin-bottom:5px; font-size:14.5px; font-weight:700; color:#243447; line-height:1.5; }
+.nrow-digest { margin-bottom:7px; font-size:12px; color:#788592; line-height:1.6; }
+.nrow-meta,.arow-meta { display:inline-block; padding:5px 9px; border-radius:6px;
+       background:#f7f9fc; font-size:11px; color:#8b98a5; line-height:1.5; }
+.arow { display:flex; gap:14px; padding:14px 2px; border-bottom:1px solid #f0f3f7; align-items:flex-start; }
+.arow-l { flex:none; width:126px; }
+.arow-time { display:inline-block; margin-top:5px; padding:2px 7px; border-radius:5px;
+       background:#f1f4f8; font-size:11px; color:#94a1ae; }
 .arow-body { flex:1; }
-.arow-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
-.arow-meta { font-size:11px; color:#a2acb6; }
-/* 重点关注（中性样式，不标红） */
-.focus-card { background:#fbfcfd; border:1px solid #e8edf2; border-left:4px solid #b0bec5;
-              border-radius:14px; padding:6px 18px; }
-.focus-row { display:flex; gap:12px; padding:12px 0; border-bottom:1px dashed #eef1f4; align-items:flex-start; }
+.arow-title { margin-bottom:6px; font-size:14px; font-weight:700; color:#243447; line-height:1.5; }
+
+/* ---------- 重点关注（中性样式，不标红） ---------- */
+.focus-card { padding:4px 18px; background:#fbfcfd; border:1px solid #e5ebf1;
+       border-left:4px solid #b0bec5; border-radius:14px; }
+.focus-row { display:flex; gap:14px; padding:14px 2px; border-bottom:1px solid #eef1f4; align-items:flex-start; }
 .focus-row:last-child { border-bottom:none; }
-.focus-l { flex:none; width:120px; }
-.focus-name { font-size:14.5px; font-weight:800; color:#263238; }
-.focus-time { font-size:11px; color:#9aa5af; margin-top:3px; }
+.focus-l { flex:none; width:126px; }
+.focus-time { margin-top:5px; font-size:11px; color:#9aa7b4; }
 .focus-body { flex:1; }
-.focus-title { font-size:14px; font-weight:700; color:#263238; line-height:1.4; margin-bottom:4px; }
-.focus-tag { display:inline-block; font-size:11px; font-weight:700; color:#607d8b; background:#eceff1;
-             border-radius:6px; padding:2px 8px; margin-right:6px; }
-.focus-role { display:inline-block; font-size:11px; font-weight:700; color:#78909c;
-              background:#f2f5f7; border-radius:6px; padding:2px 8px; margin-right:6px; }
-.focus-note { font-size:11.5px; color:#9aa5af; line-height:1.5; }
-.foot { margin:22px 20px 0; text-align:center; color:#a8b2bb; font-size:11px; line-height:1.7; }
-.foot b { color:#8a939c; }
+.focus-title { margin-bottom:7px; font-size:14px; font-weight:700; color:#243447; line-height:1.5; }
+.focus-tag { display:inline-block; margin-right:6px; padding:3px 10px; border-radius:20px;
+       font-size:11px; font-weight:800; color:#607d8b; background:#eceff1; border:1px solid #e0e6ea; }
+.focus-role { display:inline-block; margin-right:6px; padding:3px 10px; border-radius:20px;
+       font-size:11px; font-weight:700; color:#78909c; background:#f4f7f9; border:1px solid #e8edf1; }
+.focus-note { font-size:11.5px; color:#9aa7b4; line-height:1.5; }
+
+/* ---------- 页脚 ---------- */
+.foot { margin:26px 20px 0; padding:15px 20px; text-align:center; background:#fff;
+       border:1px solid #e7edf4; border-radius:14px; color:#8795a3; font-size:11px; line-height:1.85; }
+.foot-brand { margin-bottom:6px; font-size:11.5px; font-weight:800; letter-spacing:1.6px; color:#5f6d7c; }
+.foot b { color:#667584; }
 """
 
 
 def render(data, session="早报"):
     title, color, slogan = SESSION_META.get(session, SESSION_META["早报"])
-    top = ('<div class="top"><div class="top-title">%s</div>'
+    en = SESSION_EN.get(session, "AM")
+    top = ('<div class="top">'
+           '<div class="top-brand">'
+           '<div class="brand-l"><span class="brand-mark">A</span>'
+           '<span class="brand-txt">ASTOCK DAILY</span></div>'
+           '<span class="brand-tag">%s EDITION</span></div>'
+           '<div class="top-wm">%s</div>'
+           '<div class="top-title">%s</div>'
            '<div class="top-sub">%s</div>'
-           '<div class="top-date"><span>%s</span><span>星期%s</span><span>生成于 %s</span></div></div>'
-           % (title, slogan, esc(data.get("日期")), esc(data.get("星期")), esc(data.get("生成时间"))))
+           '<div class="top-date"><span>%s</span><span>星期%s</span><span>生成于 %s</span></div>'
+           '</div>'
+           % (en, en, esc(title), esc(slogan), esc(data.get("日期")),
+              esc(data.get("星期")), esc(data.get("生成时间"))))
 
-    parts = [top, block_market(data.get("全球市场")),
+    parts = [top, block_market(data.get("全球市场"), session),
              block_finance(data.get("财报") or {}),
              block_unlock(data.get("解禁") or {}),
              block_news(data.get("要闻"), data.get("场次", "早报")),
@@ -529,15 +633,17 @@ def render(data, session="早报"):
              block_ann(data.get("公告")),
              block_lhb(data.get("龙虎榜") or {})]
 
-    foot = ('<div class="foot">数据源：东方财富 / 新浪财经 ｜ <b>解读为程序化规则判断，仅供研究参考，不构成投资建议</b><br/>'
+    foot = ('<div class="foot"><div class="foot-brand">A股每日财经简报 · 自动生成 · 红涨绿跌</div>'
+            '数据源：东方财富 / 新浪财经 ｜ <b>解读为程序化规则判断，仅供研究参考，不构成投资建议</b><br/>'
             '判定口径：按信息对个股基本面 / 股东权益 / 资金供需，或对市场流动性与风险偏好的正向或负面影响定档；'
             'S=已落地强证据、A=方向明确、B=预期性信号，「重大」档须有强证据；个股自身股价涨跌与例行披露不参与判定<br/>'
-            'A股每日财经简报 · 自动生成 · 红涨绿跌</div>')
+            '仅展示当日新增数据，当日无数据的板块不展示</div>')
 
+    css = CSS.replace("__IMG_W__", str(IMG_W)).replace("__THEME__", color)
     html = ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>'
             '<meta name="viewport" content="width=device-width"/>'
             '<style>%s</style></head><body><div class="page">%s</div></body></html>'
-            % (CSS % (IMG_W, color, color, color), "".join(parts) + foot))
+            % (css, "".join(parts) + foot))
     return html
 
 
