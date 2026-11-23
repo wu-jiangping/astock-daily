@@ -80,11 +80,28 @@ def send_image(webhook, png_path, quality=82):
     return _post(webhook, payload)
 
 
+def _clip_text(s, n):
+    s = str(s or "")
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
 def build_summary(data):
-    """拼装 markdown 文本概要。"""
+    """拼装 markdown 文本概要：分区排版，随长图一起发。"""
     s = data.get("场次", "早报")
     date = data.get("日期", "")
-    lines = ["**%s** · %s 星期%s" % (SESSION_TITLE.get(s, "A股" + s), date, data.get("星期", ""))]
+    lines = ["**%s** · %s 星期%s" % (SESSION_TITLE.get(s, "A股" + s), date, data.get("星期", "")),
+             "————————————"]
+
+    mkt = data.get("全球市场") or []
+    if mkt:
+        up = sum(1 for x in mkt if (x.get("涨跌幅") or 0) > 0)
+        dn = sum(1 for x in mkt if (x.get("涨跌幅") or 0) < 0)
+        seg = []
+        for x in mkt[:4]:
+            c = x.get("涨跌幅")
+            seg.append("%s %s%.2f%%" % (x["名称"], "+" if (c or 0) > 0 else "", c or 0))
+        lines.append("**【全球市场】** 涨 %d / 跌 %d" % (up, dn))
+        lines.append("；".join(seg))
 
     fin = data.get("财报") or {}
     if fin.get("预喜") or fin.get("爆雷"):
@@ -94,40 +111,34 @@ def build_summary(data):
                 len(fin["预喜"]), top[0]["名称"], top[0]["净利润同比"])
         else:
             t = "预喜%d家" % len(fin["预喜"])
-        lines.append("**财报**：新披露 %d 家；%s；爆雷 %d 家" % (fin.get("样本数", 0), t, len(fin.get("爆雷") or [])))
+        lines.append("**【最新财报】** 当日新披露 %d 家；%s；爆雷 %d 家" % (
+            fin.get("样本数", 0), t, len(fin.get("爆雷") or [])))
 
     un = data.get("解禁") or {}
     if un.get("今日") or un.get("临近"):
-        k = len(un.get("今日") or [])
         tot = (un.get("今日") or []) + (un.get("临近") or [])
         if tot:
-            top = tot[0]
-            lines.append("**解禁**：今日 %d 家；最大 %s 占总股本 %s" % (
-                k, top["名称"], top.get("解禁比例", "—")))
-
-    mkt = data.get("全球市场") or []
-    if mkt:
-        seg = []
-        for x in mkt[:4]:
-            c = x.get("涨跌幅")
-            seg.append("%s %s%.2f%%" % (x["名称"], "+" if (c or 0) > 0 else "", c or 0))
-        lines.append("**海外市场**：" + "；".join(seg))
+            lines.append("**【限售解禁】** 当日 %d 家；最大 %s 占总股本 %s" % (
+                len(un.get("今日") or []), tot[0]["名称"], tot[0].get("解禁比例", "—")))
 
     focus = data.get("重点关注") or []
     if focus:
-        seg = ["%s[%s] %s" % (x.get("名称") or "",
-                              (x.get("角色") or "").split(" / ")[0],
-                              (x.get("公告标题") or "")[:24]) for x in focus[:2]]
-        lines.append("**重点关注**：" + "；".join(seg))
+        lines.append("**【重点关注】** %d 条" % len(focus))
+        for x in focus[:2]:
+            lines.append("  %s[%s] %s" % (
+                x.get("名称") or "", (x.get("角色") or "").split(" / ")[0],
+                _clip_text(x.get("公告标题"), 26)))
 
     cnt = []
     if data.get("要闻"):
         cnt.append("要闻 %d 条" % len(data["要闻"]))
     if data.get("公告"):
         cnt.append("公告 %d 条" % len(data["公告"]))
-    lines.append(("**%s**，详见下图。" % " · ".join(cnt)) if cnt else "详见下图。")
+    lines.append(("**【%s】** %s，详见下图。" % (
+        "隔夜要闻" if s == "早报" else "今日要闻", " · ".join(cnt))) if cnt else "详见下图。")
+    lines.append("————————————")
     lines.append("> 解读为程序化规则判断，仅供参考，不构成投资建议。")
-    return "\n\n".join(lines)
+    return "\n".join(lines)
 
 
 SESSION_TITLE = {"早报": "A股早报", "午报": "A股午报", "晚报": "A股晚报"}
