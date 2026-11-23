@@ -145,41 +145,283 @@ def safe_round(v, digits=2):
 
 
 # ---------------------------------------------------------------- 解读引擎
-POS_WORDS = ["增持", "回购", "中标", "分红", "预增", "扭亏", "股权激励", "战略合作",
-             "获批", "通过", "签署", "突破", "创新高", "超额", "涨价", "产能扩张",
-             "大涨", "上涨", "降息", "降准", "刺激", "超预期", "增长", "回暖", "复苏",
-             "新高", "利好", "扩张", "投产", "增持计划", "回购注销", "订单", "提价"]
-NEG_WORDS = ["减持", "预亏", "亏损", "诉讼", "问询", "警示", "质押", "冻结", "退市",
-             "立案", "辞职", "减值", "违规", "担保", "处罚", "终止", "下修", "跌停",
-             "大跌", "下跌", "暴跌", "加息", "通胀", "衰退", "制裁", "关税", "冲突",
-             "不及预期", "裁员", "风险", "下滑", "回落", "承压", "爆雷", "商誉", "占用"]
+# 判定体系（2026-11-23 按用户要求重定）
+#
+# 唯一判据：这条信息对「个股基本面 / 股东权益 / 资金供需」或对「市场整体
+# 流动性与风险偏好」，究竟是正向还是负面。不按字面情绪，不按词频堆分。
+#
+# 七条原则：
+#  1 只判影响原因。已发生的涨跌（大涨/跌停/创新高）、例行披露不参与打分。
+#  2 白名单制：只有规则表里的词才计分，其余一律不计，避免泛词误判。
+#  3 证据分级 S=±4（已落地、直接、可量化）/ A=±2（方向明确待落地）
+#    / B=±1（预期性、间接、情绪面）。
+#  4 「重大利好/重大利空」必须有 S 级证据或 ≥2 条 A 级证据，弱信号堆不出来。
+#  5 否定与反转用前置短语规则优先处理，匹配后从文本屏蔽，避免裸词二次计分
+#    （典型：「终止减持」是正向，不是「减持」利空）。
+#  6 同一语义组只计一次，抑制词频放大。
+#  7 多空并存不简单相抵：净影响 |s|<=1 时归中性；否则按净方向并标注交织。
+#
+# 配色沿用红涨绿跌（中国习惯）；中性灰。
 
 
-def score_text(text):
-    """文本利好/利空打分。返回 (score, hits)"""
+def _pre(keys, score, level, why):
+    return {"keys": keys, "score": score, "level": level, "why": why}
+
+
+def _grp(keys, score, level, scope, why):
+    return {"keys": keys, "score": score, "level": level, "scope": scope, "why": why}
+
+
+# 前置短语：带否定 / 反转 / 例行性质的组合，优先匹配并屏蔽
+PRE_RULES = [
+    # —— 反转向正：负向事项被终止，实为解除压力 ——
+    _pre(["终止减持", "提前终止减持", "承诺不减持", "不减持", "放弃减持", "减持计划到期未实施"],
+         +2, "A", "股东终止或放弃减持，抛压解除"),
+    _pre(["不向下修正", "不下修", "不修正转股价格", "不行使下修权利"],
+         0, "-", "不下修转股价，避免股本摊薄"),
+    # —— 反转向负：正向事项落空 ——
+    _pre(["终止重大资产重组", "重大资产重组终止", "终止筹划重大资产重组", "撤回重组申请",
+          "重组被否", "重大资产重组未获通过"],
+         -4, "S", "重组预期落空"),
+    _pre(["终止实施股权激励", "终止股权激励", "终止回购", "终止增持", "撤销激励计划"],
+         -2, "A", "正向事项终止"),
+    _pre(["未通过", "审核未通过", "复审未通过", "未获通过", "不予核准", "申请被否", "否决"],
+         -2, "A", "审批或复审未获通过"),
+    # —— 强监管 / 强落地事件 ——
+    _pre(["重大资产重组事项获得审核通过", "获得核准", "获得批复", "重组过会",
+          "并购重组审核通过", "注册生效"],
+         +4, "S", "重组或发行获监管核准"),
+    _pre(["签订日常经营重大合同", "签订重大合同", "重大合同", "重大订单",
+          "中标通知书", "收到中标通知书", "中标金额"],
+         +4, "S", "订单落地，直接增厚收入"),
+    _pre(["预中标", "预中标公示", "拟中标"], +2, "A", "预中标，订单待落地"),
+    _pre(["撤销退市风险警示", "撤销其他风险警示", "摘帽", "撤销风险警示", "撤销ST"],
+         +4, "S", "风险警示解除"),
+    _pre(["违规担保", "逾期担保", "资金占用", "非经营性占用", "司法冻结", "股份冻结",
+          "平仓风险", "强制平仓"],
+         -2, "A", "股东或资金链风险"),
+    # —— 例行 / 方向不定的中性事项（命中后屏蔽裸词）——
+    _pre(["因工作调整辞职", "因工作调整", "工作调整", "正常退休", "岗位调整"],
+         0, "-", "正常人事变动"),
+    _pre(["股票交易异常波动", "异常波动", "风险提示", "风险提示公告"],
+         0, "-", "例行风险提示"),
+    _pre(["提供担保", "为全资子公司提供担保", "为子公司提供担保", "担保进展", "对外担保"],
+         0, "-", "例行担保"),
+    _pre(["办理质押", "股份质押", "质押式回购", "解除质押"],
+         0, "-", "常规质押或解押"),
+    _pre(["重大资产出售", "出售子公司股权", "出售资产", "剥离资产"],
+         0, "-", "资产剥离，方向视对价与用途而定"),
+    _pre(["向下修正", "转股价格修正", "修正转股价格"],
+         0, "-", "转债条款调整，方向不定"),
+    _pre(["修订通过", "审议通过", "表决通过", "管理制度", "工作细则", "管理办法",
+          "公司章程", "议事规则", "翌日披露报表", "H股公告", "会议决议", "董事会决议",
+          "股东大会通知", "召开股东会", "会计师事务所"],
+         0, "-", "例行治理或披露文件"),
+]
+
+# 分组证据规则：只有这些词参与计分，同组只计一次
+# scope: stock=个股类文本 / market=宏观市场类文本 / both=通用
+IMPACT_GROUPS = [
+    # ---------- 正向 S：已落地、直接改变盈利、权益或控制权 ----------
+    _grp(["回购注销", "注销回购股份", "注销部分限制性股票"], 4, "S", "stock",
+         "回购注销减少股本，直接增厚每股收益"),
+    _grp(["重大资产重组", "发行股份购买资产", "发行股份及支付现金购买资产", "资产注入",
+          "整体上市", "重大资产置换", "要约收购", "全面要约", "被吸收合并",
+          "吸收合并本公司", "控制权变更", "实际控制人变更", "控股股东变更", "易主",
+          "借壳", "重组上市", "私有化"], 4, "S", "stock",
+         "控制权或优质资产注入预期，上市平台价值重估"),
+    _grp(["业绩预增", "扭亏为盈", "业绩大幅预增", "净利润预增"], 4, "S", "stock",
+         "盈利大幅改善或扭亏"),
+    _grp(["大额增持完成", "增持完成", "回购完成"], 4, "S", "stock",
+         "真金白银增持或回购已完成"),
+    # ---------- 正向 A：方向明确，幅度或落地待定 ----------
+    _grp(["回购", "提议回购", "拟回购", "增持", "增持计划", "拟增持", "增持股份"],
+         2, "A", "stock", "回购或增持，彰显信心、减少流通盘"),
+    _grp(["股权激励", "员工持股", "限制性股票激励", "股票期权激励"],
+         2, "A", "stock", "绑定核心团队，中长期激励"),
+    _grp(["现金分红", "分红预案", "利润分配预案", "提高分红比例", "中期分红"],
+         2, "A", "stock", "现金回报股东"),
+    _grp(["战略合作", "签署战略合作", "框架合作协议", "产业合作"],
+         2, "A", "stock", "业务协同预期"),
+    _grp(["涨价", "提价", "价格上调", "产品提价", "售价上调"],
+         2, "A", "stock", "毛利改善预期"),
+    _grp(["政府补助", "获得补助", "收到补助", "财政补贴"],
+         2, "A", "stock", "补助计入当期损益"),
+    _grp(["获批注册", "获得注册批件", "药品注册证书", "生产批件", "获得专利",
+          "新产品获批", "临床试验获批"],
+         2, "A", "stock", "产品或资质落地"),
+    # ---------- 正向 B：预期性、间接、情绪面 ----------
+    _grp(["降准", "降息", "释放流动性", "流动性宽松", "政策刺激", "财政刺激",
+          "稳增长政策", "下调LPR", "下调MLF"], 2, "A", "market",
+         "货币或财政宽松，直接改善市场流动性"),
+    _grp(["逆回购投放", "风险偏好回升", "外资净流入", "PMI回升", "经济回暖", "复苏",
+          "股市稳定基金", "稳定基金", "平准基金", "政策托底", "维稳", "救市",
+          "产业扶持", "补贴政策"], 1, "B", "market",
+         "政策托底或预期性改善，提振市场风险偏好"),
+    _grp(["超预期", "产能扩张", "投产", "量产", "放量", "订单增长", "需求回暖",
+          "行业复苏", "新产品", "新签合同", "产能利用率提升", "批量交付",
+          "批量供货", "批量出货", "开始交付", "实现量产", "放量阶段"], 1, "B", "stock",
+         "经营改善或订单落地的预期性信号"),
+    # ---------- 负向 S：已落地、直接冲击盈利、监管状态或偿债能力 ----------
+    _grp(["立案告知书", "立案调查", "被立案", "涉嫌违法违规", "行政处罚决定书"],
+         -4, "S", "stock", "监管立案或处罚，重大不确定性"),
+    _grp(["退市风险警示", "被实施其他风险警示", "可能终止上市", "终止上市",
+          "面值退市", "强制退市", "实施ST"], -4, "S", "stock",
+         "退市或风险警示"),
+    _grp(["业绩首亏", "业绩预亏", "由盈转亏", "巨额亏损", "大额计提减值",
+          "计提大额减值", "商誉暴雷"], -4, "S", "stock",
+         "盈利大幅恶化或巨额减值"),
+    _grp(["破产重整", "被申请重整", "清算", "债务违约", "未能按期兑付", "债券违约"],
+         -4, "S", "stock", "偿债风险"),
+    _grp(["大额减持完成", "清仓式减持", "减持完成"], -4, "S", "stock",
+         "大额减持已实施，供给冲击"),
+    # ---------- 负向 A：方向明确，幅度或落地待定 ----------
+    _grp(["减持", "拟减持", "减持计划", "减持股份", "大宗减持", "减持预披露"],
+         -2, "A", "stock", "流通盘供给增加"),
+    _grp(["问询函", "关注函", "警示函", "监管函", "监管措施", "通报批评", "责令改正"],
+         -2, "A", "stock", "监管问询或警示"),
+    _grp(["诉讼", "仲裁", "涉案", "被起诉", "败诉"],
+         -2, "A", "stock", "或有负债与经营不确定性"),
+    _grp(["辞职", "离任", "辞任", "高管变动", "董事长变更"],
+         -2, "A", "stock", "治理层面的不确定性"),
+    _grp(["业绩预减", "业绩下滑", "净利润下降", "净利润同比减少", "亏损扩大",
+          "由盈转亏预计"], -2, "A", "stock", "盈利走弱"),
+    _grp(["计提减值", "资产减值", "商誉减值", "存货跌价"],
+         -2, "A", "stock", "资产质量下修"),
+    # ---------- 负向 B：预期性、间接、情绪面 ----------
+    _grp(["加息", "通胀", "关税", "制裁", "衰退", "流动性收紧", "经济下行",
+          "地缘冲突"], -2, "A", "market",
+         "货币收紧或外部冲击，直接压制市场风险偏好"),
+    _grp(["风险偏好下降", "外资净流出", "PMI回落", "收紧监管", "承压",
+          "指数下跌", "指数大跌", "美股狂跌", "股市暴跌", "全球股市下挫",
+          "熔断", "暂停程序化卖出", "SIDECAR", "跌破每吨",
+          "跌幅扩大", "指数跌幅", "全线走低", "收跌"],
+         -1, "B", "market",
+         "外围市场、指数或商品价格走弱，压制风险偏好（作为其他标的的输入变量）"),
+    _grp(["砍单", "需求下修", "订单下修", "停工", "延误", "产能过剩",
+          "小幅下滑", "裁员", "不及预期", "需求走弱", "业绩承压",
+          "大跳水", "遭吐槽", "不适配", "召回", "质量问题", "退货潮", "需求疲软",
+          "变现受阻", "增速放缓", "增长放缓", "收入放缓"],
+         -1, "B", "stock", "经营或产品口碑走弱的预期性信号"),
+]
+
+
+def analyze_impact(text, scope="stock"):
+    """判定信息对个股 / 市场的影响方向。
+
+    返回 (score, hits, whys, both, major_ok, obj_label)
+      score    净影响分数（正=正向，负=负面）
+      hits     命中的证据词
+      whys     对应的判定依据
+      both     是否多空证据并存
+      major_ok 是否具备升到「重大」档的强证据
+      obj_label 作用对象：个股 / 市场 / 市场与个股
+    """
+    import re as _re
     t = str(text or "")
-    pos = [(w, t.count(w)) for w in POS_WORDS if w in t]
-    neg = [(w, t.count(w)) for w in NEG_WORDS if w in t]
-    s = sum(c for _, c in pos) - sum(c for _, c in neg)
-    hits = [w for w, _ in pos][:3] + [w for w, _ in neg][:3]
+    # 公司主动澄清「不存在…负面情形」时，整段是否定式表述，不应把里面的
+    # 负面词当成真实利空（例：「不存在需求预期下修或砍单情形…已进入放量阶段」）
+    t, _neg_clarify = _re.subn(r"不存在[^，。；、\s]{0,24}(情形|情况|风险|压力)", " ", t)
+    ev_hits, whys, neutral_hits = [], [], []
+    if _neg_clarify:
+        neutral_hits.append("公司澄清无该负面情形")
+    score = pos_sum = neg_sum = 0
+    s_cnt = a_cnt = 0
+    stock_hit = market_hit = False
+
+    def add(sc, lv, why, kw, scp):
+        nonlocal score, pos_sum, neg_sum, s_cnt, a_cnt, stock_hit, market_hit
+        score += sc
+        if sc > 0:
+            pos_sum += sc
+        elif sc < 0:
+            neg_sum += sc
+        if lv == "S":
+            s_cnt += 1
+        elif lv == "A":
+            a_cnt += 1
+        if scp == "market":
+            market_hit = True
+        elif scp == "stock":
+            stock_hit = True
+        ev_hits.append(kw)
+        whys.append(why)
+
+    # 1) 前置短语：优先匹配，同一规则内所有命中词都屏蔽，防裸词二次计分
+    #    （例：「终止减持计划暨承诺不减持」里的两处「减持」都要清掉）
+    for rule in PRE_RULES:
+        matched = [kw for kw in rule["keys"] if kw in t]
+        if not matched:
+            continue
+        for kw in matched:
+            t = t.replace(kw, " ")
+        if rule["score"]:
+            add(rule["score"], rule["level"], rule["why"], matched[0], "stock")
+        else:
+            # 同义短语只展示最长的一条，避免「异常波动、股票交易异常波动」重复
+            neutral_hits.append(max(matched, key=len))
+    # 2) 分组证据：同组只计一次
+    for g in IMPACT_GROUPS:
+        if scope != "both" and g["scope"] not in (scope, "both"):
+            continue
+        for kw in g["keys"]:
+            if kw in t:
+                t = t.replace(kw, " ")
+                add(g["score"], g["level"], g["why"], kw, g["scope"])
+                break
+    # 3) 多空交织且净影响很弱 → 归中性
+    both = pos_sum > 0 and neg_sum > 0
+    if both and abs(score) <= 1:
+        score = 0
+    major_ok = (s_cnt >= 1) or (a_cnt >= 2)
+    if market_hit and stock_hit:
+        obj = "市场与个股"
+    elif market_hit:
+        obj = "市场"
+    else:
+        obj = "个股"
+    return score, ev_hits, whys, both, major_ok, obj, neutral_hits
+
+
+def score_text(text, scope="stock"):
+    """兼容旧调用：返回 (score, hits)。"""
+    s, hits, _w, _b, _m, _o, _n = analyze_impact(text, scope)
     return s, hits
 
 
-def judge(score, strong=2, weak=1):
-    """把分数映射成 档位 / 文案 / 颜色。文案为纯文字，不带星号等装饰符号。"""
-    if score >= strong + 1:
+def judge(score, strong=2, weak=1, major_ok=True):
+    """分数 → 档位 / 文案 / 颜色。
+
+    major_ok：是否允许升到「重大」。文本类由调用方按证据等级传入；
+    数值类（财报/解禁/龙虎榜）自带量级，默认允许。
+    """
+    if score >= 4 and major_ok:
         return "利好", "重大利好", "#c62828"
     if score >= strong:
         return "利好", "利好", "#c62828"
     if score >= weak:
         return "偏多", "小幅利好", "#e57373"
-    if score <= -(strong + 1):
+    if score <= -4 and major_ok:
         return "利空", "重大利空", "#2e7d32"
     if score <= -strong:
         return "利空", "利空", "#2e7d32"
     if score <= -weak:
         return "偏空", "小幅利空", "#66bb6a"
-    return "中性", "中性，影响有限", "#8e8e8e"
+    return "中性", "中性", "#8e8e8e"
+
+
+def impact_text(label, obj, hits, whys, both, neutral=None, fallback="例行披露"):
+    """生成带判定依据的解读文案，让「为什么是这个方向」在推送里可见。"""
+    neutral = neutral or []
+    if label == "中性":
+        ev = "、".join(list(dict.fromkeys(neutral))[:2]) or fallback
+        if both:
+            return "中性：多空证据交织、净影响接近零｜%s" % ev
+        return "中性：%s｜无明确方向性信号" % ev
+    direction = "正向" if ("利好" in label) else "负面"
+    ev = "、".join(list(dict.fromkeys(hits))[:2]) or fallback
+    return "%s：对%s%s｜依据 %s%s" % (label, obj, direction, ev,
+                                    "，多空交织取净方向" if both else "")
 
 
 def explain_finance(item):
@@ -230,15 +472,15 @@ def explain_finance(item):
     基础 = "；".join(parts) if parts else "数据披露"
 
     if s >= 2:
-        txt = "%s：业绩大幅改善，%s，短线资金关注度高。" % (label, 基础)
+        txt = "%s：对个股正向｜业绩大幅改善，%s" % (label, 基础)
     elif s >= 1:
-        txt = "%s：业绩稳中有进，%s。" % (label, 基础)
+        txt = "%s：对个股正向｜业绩稳中有进，%s" % (label, 基础)
     elif s <= -2:
-        txt = "%s：业绩承压，%s，注意回避。" % (label, 基础)
+        txt = "%s：对个股负面｜业绩承压，%s" % (label, 基础)
     elif s <= -1:
-        txt = "%s：业绩小幅走弱，%s。" % (label, 基础)
+        txt = "%s：对个股负面｜业绩小幅走弱，%s" % (label, 基础)
     else:
-        txt = "%s：%s。" % (label, 基础)
+        txt = "中性：业绩变动平缓｜%s" % 基础
     return tag, label, color, txt
 
 
@@ -258,38 +500,48 @@ def explain_unlock(ratio_pct, cap_yi):
         s = 0
     tag, label, color = judge(s)
     if s <= -3:
-        txt = "%s：解禁占总股本 %s，规模大，抛压预期强，短期回避。" % (label, pct(ratio_pct))
+        txt = "%s：对个股负面｜解禁占总股本 %s，规模大，抛压预期强" % (label, pct(ratio_pct))
     elif s <= -2:
-        txt = "%s：解禁占总股本 %s，有一定减持压力。" % (label, pct(ratio_pct))
+        txt = "%s：对个股负面｜解禁占总股本 %s，有一定减持压力" % (label, pct(ratio_pct))
     elif s == -1:
-        txt = "%s：解禁占总股本 %s，压力有限但需留意。" % (label, pct(ratio_pct))
+        txt = "%s：对个股负面｜解禁占总股本 %s，压力有限但需留意" % (label, pct(ratio_pct))
     else:
-        txt = "%s：解禁占总股本 %s，占比很小，影响基本可忽略。" % (label, pct(ratio_pct))
+        txt = "中性：对个股影响可忽略｜解禁占总股本 %s，占比很小" % pct(ratio_pct)
     if cap_yi and cap_yi >= 50:
-        txt += " 解禁市值约 %.1f 亿元，体量偏大。" % cap_yi
+        txt += "；解禁市值约 %.1f 亿元，体量偏大" % cap_yi
     return tag, label, color, txt
 
 
 def explain_news(title, digest):
-    s, hits = score_text(title)
-    s2, hits2 = score_text(digest or "")
-    s = s + (s2 * 1 if s2 else 0)
-    tag, label, color = judge(s)
-    hint = ("关键词：" + "、".join(list(dict.fromkeys(hits + hits2))[:4])) if (hits or hits2) else "暂无明显多空信号"
-    txt = "%s，%s" % (label, hint)
+    """要闻：作用对象可能是市场整体，也可能是某只个股，故用 both 口径。
+
+    摘要不参与方向打分（长摘要堆词会把「风险」放大成重大利空）；
+    仅当标题没有证据时作弱补充，且最高只到「小幅」，不升重大档。
+    """
+    s, hits, whys, both, major_ok, obj, neutral = analyze_impact(title, "both")
+    if not hits and not neutral:
+        s2, h2, w2, _b2, _m2, o2, n2 = analyze_impact(digest or "", "both")
+        if h2:
+            s = 1 if s2 > 0 else (-1 if s2 < 0 else 0)
+            hits, whys, obj, neutral = h2[:2], w2[:2], o2, n2
+            both, major_ok = False, False
+    tag, label, color = judge(s, major_ok=major_ok)
+    market_result = ["指数", "下跌", "上涨", "跌破", "跳水", "狂跌", "暴跌", "价格", "交付"]
+    fb = ("行情或数据结果" if any(w in title for w in market_result)
+          else "宏观或行业信息")
+    txt = impact_text(label, obj, hits, whys, both, neutral, fallback=fb)
     return tag, label, color, txt
 
 
 def explain_announce(title):
-    # 被收购 / 被重组的一方：用户指定按「重大利好」重点关注
+    # 被重组 / 易主的一方：用户明确指定按「重大利好」重点关注，保持该口径
     hit, role = merger_role(title)
     if hit:
         return ("利好", "重大利好", "#c62828",
-                "重大利好：%s，公司作为被收购 / 被重组的一方，关注方案进度与监管审核" % role)
-    s, hits = score_text(title)
-    tag, label, color = judge(s)
-    hint = ("关键词：" + "、".join(list(dict.fromkeys(hits))[:4])) if hits else "常规披露，无显著多空信号"
-    txt = "%s，%s" % (label, hint)
+                "重大利好：对个股正向｜依据 %s(S)：上市平台自身被重组或易主" % role)
+    s, hits, whys, both, major_ok, obj, neutral = analyze_impact(title, "stock")
+    tag, label, color = judge(s, major_ok=major_ok)
+    txt = impact_text(label, obj, hits, whys, both, neutral, fallback="常规披露")
     return tag, label, color, txt
 
 
@@ -880,15 +1132,15 @@ def explain_lhb(x):
     detail = "，".join(parts) or "席位资金博弈"
 
     if s >= 3:
-        txt = "%s：%s，机构资金介入明显，短线可跟踪。" % (label, detail)
+        txt = "%s：对个股正向｜%s，机构资金介入明显" % (label, detail)
     elif s >= 1:
-        txt = "%s：%s，买方占优。" % (label, detail)
+        txt = "%s：对个股正向｜%s，买方占优" % (label, detail)
     elif s <= -3:
-        txt = "%s：%s，资金出逃明显，注意风险。" % (label, detail)
+        txt = "%s：对个股负面｜%s，资金出逃明显" % (label, detail)
     elif s <= -1:
-        txt = "%s：%s，卖方占优。" % (label, detail)
+        txt = "%s：对个股负面｜%s，卖方占优" % (label, detail)
     else:
-        txt = "%s：%s，多空均衡。" % (label, detail)
+        txt = "中性：%s，多空均衡" % detail
     return tag, label, color, txt
 
 
