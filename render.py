@@ -530,6 +530,8 @@ def render(data, session="早报"):
              block_lhb(data.get("龙虎榜") or {})]
 
     foot = ('<div class="foot">数据源：东方财富 / 新浪财经 ｜ <b>解读为程序化规则判断，仅供研究参考，不构成投资建议</b><br/>'
+            '判定口径：按信息对个股基本面 / 股东权益 / 资金供需，或对市场流动性与风险偏好的正向或负面影响定档；'
+            'S=已落地强证据、A=方向明确、B=预期性信号，「重大」档须有强证据；个股自身股价涨跌与例行披露不参与判定<br/>'
             'A股每日财经简报 · 自动生成 · 红涨绿跌</div>')
 
     html = ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>'
