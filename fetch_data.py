@@ -164,8 +164,8 @@ def safe_round(v, digits=2):
 # 配色沿用红涨绿跌（中国习惯）；中性灰。
 
 
-def _pre(keys, score, level, why):
-    return {"keys": keys, "score": score, "level": level, "why": why}
+def _pre(keys, score, level, why, scope="stock"):
+    return {"keys": keys, "score": score, "level": level, "why": why, "scope": scope}
 
 
 def _grp(keys, score, level, scope, why):
@@ -174,6 +174,12 @@ def _grp(keys, score, level, scope, why):
 
 # 前置短语：带否定 / 反转 / 例行性质的组合，优先匹配并屏蔽
 PRE_RULES = [
+    # —— 货币政策否定式：「不X息」里含「X息」，不能被动作裸词误判 ——
+    _pre(["不加息", "不会加息", "暂不加息", "暂停加息", "推迟加息", "延后加息",
+          "不再加息", "停止加息", "结束加息", "加息周期结束"],
+         +1, "B", "紧缩动作被否定或结束，流动性压力缓解", "market"),
+    _pre(["不降息", "暂不降息", "不再降息", "降息落空", "降息周期结束"],
+         -1, "B", "宽松动作被否定，流动性预期转弱", "market"),
     # —— 反转向正：负向事项被终止，实为解除压力 ——
     _pre(["终止减持", "提前终止减持", "承诺不减持", "不减持", "放弃减持", "减持计划到期未实施"],
          +2, "A", "股东终止或放弃减持，抛压解除"),
@@ -306,6 +312,90 @@ IMPACT_GROUPS = [
 ]
 
 
+# ---------------------------------------------------------------- 货币政策预期层
+# 背景（2026-11-23 用户反馈）：「12月加息概率不再是100%」被裸词「加息」判成
+# 「利空」。但这条讲的是加息概率从 100% 回落到 95.2%，是紧缩预期边际降温，
+# 对市场流动性与风险偏好反而是正向的。
+# 结论：政策「已落地」与「只是预期」必须分开；预期类按**概率变化方向**判定，
+# 不按动作字面（加息=利空 / 降息=利好）判定。预期变化统一给 B 级 ±1，
+# 只有真正落地的降准 / 降息 / 加息才走 IMPACT_GROUPS 的 A 级 ±2。
+_RATE_CTX = (r"概率|预期|定价|押注|预计|料将|可能|利率期货|美联储观察|"
+             r"观察工具|市场定价|点阵图|是否|分歧|观望|悬念")
+_RATE_HAWK = r"加息|上调利率|加息\d*个基点"
+_RATE_DOVE = r"降息|下调利率|降息\d*个基点"
+_RATE_HOLD = r"按兵不动|维持利率不变|维持现有利率"
+_RATE_NOHIKE = (r"不加息|不会加息|暂不加息|暂停加息|推迟加息|延后加息|"
+                r"不再加息|停止加息|结束加息|加息周期结束|不再预计加息|不再押注加息")
+_RATE_NODOVE = r"不降息|暂不降息|不再降息|降息落空|降息周期结束|降息预期落空"
+_RATE_DOWN = (r"不再是?100%|不再百分百|不再是百分之百|不再百分之百|"
+              r"概率(?:下降|回落|降温|下滑|降低|走低|减少|跌至|降至|下调|缩水|低于)|"
+              r"预期(?:降温|回落|减弱|下降|走弱|下调|落空)|"
+              r"押注(?:降温|回落|减少|下降)|低于预期|推迟|延后|暂缓|搁置")
+_RATE_UP = (r"概率(?:上升|升温|回升|升至|提高|上调|增加|攀升|走高|扩大)|"
+            r"预期(?:升温|回升|增强|上升|走强|强化)|"
+            r"押注(?:升温|增加|回升|增强)|重回100%|百分百预计|高于预期|提前")
+_RATE_VAGUE = r"仍有分歧|尚不确定|难以判断|五五开|悬而未决|存疑"
+_RATE_MASK = "|".join([_RATE_NOHIKE, _RATE_NODOVE, _RATE_HAWK, _RATE_DOVE,
+                       _RATE_HOLD, _RATE_DOWN, _RATE_UP, _RATE_VAGUE])
+
+
+def _rate_expect_layer(t, add, neutral_hits):
+    """识别货币政策「预期变化」表述，按方向计分并清洗文本。
+
+    逐子句处理：只有带概率 / 预期 / 定价语境的子句才进入本层；已落地的政策
+    动作（「央行宣布加息25个基点」）仍留给 IMPACT_GROUPS 按 A 级判定。
+    返回清洗后的文本，避免「加息 / 降息」裸词在后续分组规则里二次计分。
+    """
+    import re as _re
+    parts = _re.split(r"([，。；、,;！!？?])", t)
+    out = []
+    for seg in parts:
+        if not seg or _re.fullmatch(r"[，。；、,;！!？?]", seg):
+            out.append(seg)
+            continue
+        if not _re.search(_RATE_CTX, seg):
+            out.append(seg)
+            continue
+        hawk = _re.search(_RATE_HAWK, seg)
+        dove = _re.search(_RATE_DOVE, seg)
+        hold = _re.search(_RATE_HOLD, seg)
+        nohike = _re.search(_RATE_NOHIKE, seg)
+        nodove = _re.search(_RATE_NODOVE, seg)
+        if not (hawk or dove or hold):
+            out.append(seg)
+            continue
+        down = _re.search(_RATE_DOWN, seg)
+        up = _re.search(_RATE_UP, seg)
+        sc, ev, why = 0, "", ""
+        if _re.search(_RATE_VAGUE, seg):
+            neutral_hits.append("货币政策预期尚有分歧，方向未定")
+        elif nohike or (hold and up):
+            sc, ev, why = 1, "加息预期回落", "加息被否定或按兵不动概率上升，流动性压力边际缓解"
+        elif nodove:
+            sc, ev, why = -1, "降息预期落空", "降息被否定，流动性预期转弱"
+        elif hold and down:
+            sc, ev, why = -1, "加息预期升温", "按兵不动概率下降，加息概率相对上升，压制风险偏好"
+        elif dove and up:
+            sc, ev, why = 1, "降息预期升温", "宽松概率上升，改善市场流动性预期"
+        elif dove and down:
+            sc, ev, why = -1, "降息预期降温", "宽松概率回落，流动性预期转弱"
+        elif hawk and up:
+            sc, ev, why = -1, "加息预期升温", "紧缩概率上升，压制风险偏好"
+        elif hawk and down:
+            sc, ev, why = 1, "加息预期降温", "紧缩概率回落，流动性压力边际缓解"
+        else:
+            neutral_hits.append("货币政策预期，未给出概率变化方向")
+        # 只屏蔽本子句内的动作词与概率方向词，保留其余证据（如「承压」）
+        clean = seg
+        for m in sorted({x.group(0) for x in _re.finditer(_RATE_MASK, seg)},
+                        key=len, reverse=True):
+            clean = clean.replace(m, " ")
+        out.append(clean)
+        if sc:
+            add(sc, "B", why, ev, "market")
+    return "".join(out)
+
+
 def analyze_impact(text, scope="stock"):
     """判定信息对个股 / 市场的影响方向。
 
@@ -347,16 +437,21 @@ def analyze_impact(text, scope="stock"):
         ev_hits.append(kw)
         whys.append(why)
 
+    # 0) 货币政策预期层：最高优先级，按「概率变化方向」判，屏蔽动作裸词
+    t = _rate_expect_layer(t, add, neutral_hits)
     # 1) 前置短语：优先匹配，同一规则内所有命中词都屏蔽，防裸词二次计分
     #    （例：「终止减持计划暨承诺不减持」里的两处「减持」都要清掉）
     for rule in PRE_RULES:
+        r_scope = rule.get("scope", "stock")
+        if scope != "both" and r_scope not in (scope, "both"):
+            continue
         matched = [kw for kw in rule["keys"] if kw in t]
         if not matched:
             continue
         for kw in matched:
             t = t.replace(kw, " ")
         if rule["score"]:
-            add(rule["score"], rule["level"], rule["why"], matched[0], "stock")
+            add(rule["score"], rule["level"], rule["why"], matched[0], r_scope)
         else:
             # 同义短语只展示最长的一条，避免「异常波动、股票交易异常波动」重复
             neutral_hits.append(max(matched, key=len))
