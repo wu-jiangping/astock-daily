@@ -23,6 +23,10 @@ CN_TZ = timezone(timedelta(hours=8))
 
 SESSION_TAG = {"早报": "am", "午报": "noon", "晚报": "pm"}
 SESSION_TITLE = {"早报": "A股早报", "午报": "A股午报", "晚报": "A股晚报"}
+SESSION_SLOGAN = {"早报": "开盘前瞻 · 把握隔夜变量",
+                  "午报": "午间复盘 · 跟踪盘中异动",
+                  "晚报": "收盘总结 · 展望明日"}
+SESSION_COLOR = {"早报": "#b71c1c", "午报": "#e65100", "晚报": "#1a237e"}
 
 
 def load_cfg():
@@ -48,94 +52,109 @@ def load_cfg():
     return cfg
 
 
+def _clip(s, n):
+    """长标题裁到 n 字，末尾带省略号，避免断在半句上。"""
+    s = str(s or "")
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
 def build_text(data, img_url):
-    """ClawBot / 纯文字版：聊天气泡里直接读完要点，末尾给长图链接。"""
+    """ClawBot / 纯文字版：分区排版，聊天气泡里直接读完要点，末尾给长图链接。"""
     s = data.get("场次", "早报")
     title = SESSION_TITLE.get(s, "A股简报")
-    L = ["%s · %s 星期%s" % (title, data.get("日期", ""), data.get("星期", "")), "———————"]
+    L = ["%s ｜ %s 星期%s" % (title, data.get("日期", ""), data.get("星期", "")),
+         SESSION_SLOGAN.get(s, ""), "————————————"]
 
     mkt = data.get("全球市场") or []
     if mkt:
-        seg = []
-        for x in mkt[:5]:
-            c = x.get("涨跌幅") or 0
-            seg.append("%s %+.2f%%" % (x["名称"], c))
-        L.append("隔夜海外：" + " ｜ ".join(seg))
+        up = sum(1 for x in mkt if (x.get("涨跌幅") or 0) > 0)
+        dn = sum(1 for x in mkt if (x.get("涨跌幅") or 0) < 0)
+        L.append("【全球市场】涨 %d / 跌 %d" % (up, dn))
+        for x in mkt[:6]:
+            px = x.get("现价")
+            L.append("  %s %s  %+.2f%%" % (
+                x.get("名称") or "—", ("%.2f" % px) if px is not None else "—",
+                x.get("涨跌幅") or 0))
+        L.append("")
 
     fin = data.get("财报") or {}
     if fin.get("预喜") or fin.get("爆雷"):
-        top = (fin.get("预喜") or [])[:1]
-        if top and top[0].get("净利润同比") is not None:
-            L.append("财报：新披露 %d 家，预喜 %d / 爆雷 %d；最高 %s %+.1f%%" % (
-                fin.get("样本数", 0), len(fin["预喜"]), len(fin.get("爆雷") or []),
-                top[0]["名称"], top[0]["净利润同比"]))
-        else:
-            L.append("财报：新披露 %d 家，预喜 %d / 爆雷 %d" % (
-                fin.get("样本数", 0), len(fin["预喜"]), len(fin.get("爆雷") or [])))
-    for x in (fin.get("爆雷") or [])[:2]:
-        yoy = x.get("净利润同比")
-        L.append("  ⚠ %s 净利同比 %s" % (x.get("名称"), "%+.1f%%" % yoy if yoy is not None else "—"))
+        L.append("【最新财报】当日 %d 家 · 预喜 %d / 爆雷 %d" % (
+            fin.get("样本数", 0), len(fin.get("预喜") or []), len(fin.get("爆雷") or [])))
+        for x in (fin.get("预喜") or [])[:1]:
+            yoy = x.get("净利润同比")
+            if yoy is not None:
+                L.append("  预喜最高 %s 净利同比 %+.1f%%" % (x.get("名称"), yoy))
+        for x in (fin.get("爆雷") or [])[:2]:
+            yoy = x.get("净利润同比")
+            L.append("  爆雷 %s 净利同比 %s" % (
+                x.get("名称"), "%+.1f%%" % yoy if yoy is not None else "—"))
+        L.append("")
 
     un = data.get("解禁") or {}
     tot = (un.get("今日") or []) + (un.get("临近") or [])
     if tot:
-        L.append("解禁：今日 %d 家，7 日内 %d 家；最大 %s 占总股本 %s（%s）" % (
-            len(un.get("今日") or []), len(tot), tot[0].get("名称"),
-            tot[0].get("解禁比例") or "—", tot[0].get("解禁日期", "")[5:]))
+        L.append("【限售解禁】当日 %d 家" % len(tot))
+        for x in tot[:3]:
+            L.append("  %s 占总股本 %s · %s" % (
+                x.get("名称"), x.get("解禁比例") or "—", x.get("解禁市值") or "—"))
+        L.append("")
 
     lhb = data.get("龙虎榜") or {}
     if lhb.get("买入") or lhb.get("卖出"):
-        b = (lhb.get("买入") or [])[:1]
-        sl = (lhb.get("卖出") or [])[:1]
-        seg = []
-        if b:
-            seg.append("净买 %s %.2f亿" % (b[0]["名称"], (b[0].get("净买入") or 0) / 1e8))
-        if sl:
-            seg.append("净卖 %s %.2f亿" % (sl[0]["名称"], (sl[0].get("净买入") or 0) / 1e8))
         d = (lhb.get("交易日") or "")[5:]
         mark = "当日 %s" % d if lhb.get("是否当日") else ("%s 未披露" % d if d else "最近交易日")
-        L.append("龙虎榜（%s）：%s" % (mark, " ｜ ".join(seg)))
+        L.append("【龙虎榜】%s" % mark)
+        for x in (lhb.get("买入") or [])[:1]:
+            L.append("  净买 %s %.2f亿" % (x.get("名称"), (x.get("净买入") or 0) / 1e8))
+        for x in (lhb.get("卖出") or [])[:1]:
+            L.append("  净卖 %s %.2f亿" % (x.get("名称"), abs(x.get("净买入") or 0) / 1e8))
+        L.append("")
 
-    focus = (data.get("重点关注") or [])[:2]
+    focus = data.get("重点关注") or []
     if focus:
-        seg = ["%s[%s] %s" % (x.get("名称") or "",
-                              (x.get("角色") or "").split(" / ")[0],
-                              (x.get("公告标题") or "")[:22]) for x in focus]
-        L.append("重点关注：" + " ｜ ".join(seg))
+        L.append("【重点关注】%d 条" % len(focus))
+        for x in focus[:2]:
+            L.append("  %s[%s] %s" % (
+                x.get("名称") or "", (x.get("角色") or "").split(" / ")[0],
+                _clip(x.get("公告标题"), 24)))
+        L.append("")
 
     nw = data.get("要闻") or []
-    cnt = []
-    if nw:
-        cnt.append("要闻 %d 条" % len(nw))
-    if data.get("公告"):
-        cnt.append("公告 %d 条" % len(data["公告"]))
-    if cnt:
-        L.append(" · ".join(cnt))
-    for x in nw[:3]:
-        L.append("  · %s %s" % (x.get("时间"), (x.get("标题") or "")[:28]))
+    an = data.get("公告") or []
+    if nw or an:
+        cnt = []
+        if nw:
+            cnt.append("要闻 %d 条" % len(nw))
+        if an:
+            cnt.append("公告 %d 条" % len(an))
+        L.append("【%s】%s" % ("隔夜要闻" if s == "早报" else "今日要闻", " · ".join(cnt)))
+        for x in nw[:3]:
+            L.append("  %s %s" % ((x.get("时间") or "")[-5:], _clip(x.get("标题"), 26)))
+        L.append("")
 
-    L.append("———————")
+    L.append("————————————")
     if img_url:
-        L.append("完整长图（含全部明细与解读）：")
+        L.append("完整长图（全部明细 + 逐条解读）：")
         L.append(img_url)
     else:
-        L.append("完整长图见企业微信（含全部明细与逐条解读）")
-
-    L.append("解读为程序化规则判断，不构成投资建议。")
+        L.append("完整长图见企业微信（全部明细 + 逐条解读）")
+    L.append("解读为程序化规则判断，不构成投资建议")
     return "\n".join(L)
 
 
 def build_image_html(data, img_url):
-    """图片版：内容极小，绝不会触发长度限制。"""
+    """图片版：深色标题条 + 圆角原图，内容极小不会触发长度限制。"""
     s = data.get("场次", "早报")
     title = SESSION_TITLE.get(s, "A股简报")
-    date = data.get("日期", "")
-    return ('<div style="font-size:16px;font-weight:bold;margin-bottom:6px">'
-            '%s · %s 星期%s</div>'
-            '<img src="%s" style="width:100%%;display:block" />'
-            '<div style="font-size:12px;color:#999;margin-top:8px">'
+    color = SESSION_COLOR.get(s, "#1a237e")
+    return ('<div style="padding:12px 14px;margin-bottom:10px;border-radius:10px;'
+            'background:linear-gradient(120deg,%s,#37474f);color:#fff;'
+            'font-size:16px;font-weight:bold">%s · %s 星期%s</div>'
+            '<img src="%s" style="width:100%%;display:block;border-radius:10px" />'
+            '<div style="font-size:12px;color:#999;margin-top:10px">'
             '点击查看大图｜数据源：东方财富/新浪财经｜解读为程序化规则判断，不构成投资建议</div>'
-            % (title, date, data.get("星期", ""), img_url))
+            % (color, title, data.get("日期", ""), data.get("星期", ""), img_url))
 
 
 def main():
